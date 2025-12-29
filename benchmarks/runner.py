@@ -23,6 +23,19 @@ from datetime import datetime
 from pathlib import Path
 from statistics import mean, stdev
 
+# uvloop integration for 2-4x event loop performance on Linux/macOS
+# Windows is not supported by uvloop, so we gracefully fall back to default loop
+if sys.platform != "win32":
+    try:
+        import uvloop
+
+        uvloop.install()
+        # Event loop is now using uvloop for improved async performance
+    except ImportError:
+        # uvloop not installed, use default asyncio event loop
+        # Install with: pip install uvloop or poetry install --extras performance
+        pass
+
 from async_patterns.engine import EngineResult, SyncEngine, ThreadedEngine
 
 # Default test URLs for benchmarking

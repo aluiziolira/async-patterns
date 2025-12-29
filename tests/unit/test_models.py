@@ -308,6 +308,8 @@ class TestConnectionConfig:
         assert config.max_connections == 100
         assert config.timeout == 30.0
         assert config.max_keepalive_connections == 20
+        assert config.keepalive_expiry == 30.0
+        assert config.http2 is True
 
     def test_connection_config_custom_values(self) -> None:
         """ConnectionConfig should accept custom values."""
@@ -317,10 +319,42 @@ class TestConnectionConfig:
             max_connections=50,
             timeout=10.0,
             max_keepalive_connections=10,
+            keepalive_expiry=60.0,
+            http2=False,
         )
         assert config.max_connections == 50
         assert config.timeout == 10.0
         assert config.max_keepalive_connections == 10
+        assert config.keepalive_expiry == 60.0
+        assert config.http2 is False
+
+    def test_connection_config_http2_default_enabled(self) -> None:
+        """HTTP/2 should be enabled by default for better performance."""
+        from async_patterns.engine import ConnectionConfig
+
+        config = ConnectionConfig()
+        assert config.http2 is True
+
+    def test_connection_config_http2_can_be_disabled(self) -> None:
+        """HTTP/2 can be disabled for HTTP/1.1-only servers."""
+        from async_patterns.engine import ConnectionConfig
+
+        config = ConnectionConfig(http2=False)
+        assert config.http2 is False
+
+    def test_connection_config_keepalive_expiry_default(self) -> None:
+        """Keepalive expiry should default to 30 seconds."""
+        from async_patterns.engine import ConnectionConfig
+
+        config = ConnectionConfig()
+        assert config.keepalive_expiry == 30.0
+
+    def test_connection_config_keepalive_expiry_custom(self) -> None:
+        """Keepalive expiry can be configured for different workload patterns."""
+        from async_patterns.engine import ConnectionConfig
+
+        config = ConnectionConfig(keepalive_expiry=120.0)
+        assert config.keepalive_expiry == 120.0
 
     def test_connection_config_is_frozen(self) -> None:
         """ConnectionConfig should be immutable."""

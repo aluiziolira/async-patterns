@@ -145,11 +145,15 @@ class ConnectionConfig:
         max_connections: Maximum number of concurrent connections (default: 100).
         timeout: Request timeout in seconds (default: 30.0).
         max_keepalive_connections: Maximum keep-alive connections to maintain (default: 20).
+        keepalive_expiry: Seconds before closing idle keep-alive connections (default: 30.0).
+        http2: Enable HTTP/2 multiplexing for improved performance (default: True).
     """
 
     max_connections: int = 100
     timeout: float = 30.0
     max_keepalive_connections: int = 20
+    keepalive_expiry: float = 30.0
+    http2: bool = True
 
 
 @dataclass(frozen=True, slots=True)
