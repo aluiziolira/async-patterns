@@ -12,10 +12,12 @@ from async_patterns.engine import (
     SyncEngine,
     ThreadedEngine,
 )
+from async_patterns.patterns.semaphore import AcquisitionTimeoutError
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "AcquisitionTimeoutError",
     "Engine",
     "EngineResult",
     "RequestResult",
