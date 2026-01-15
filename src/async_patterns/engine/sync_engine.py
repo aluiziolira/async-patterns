@@ -1,7 +1,7 @@
-"""Synchronous HTTP Engine.
+"""Synchronous HTTP Engine using the `requests` library.
 
-This module implements the synchronous HTTP request engine using the `requests` library.
-It serves as the baseline for performance comparison with threaded and async engines.
+This module provides a baseline implementation for performance comparison
+with threaded and async engines.
 """
 
 from __future__ import annotations
@@ -11,15 +11,15 @@ import tracemalloc
 
 import requests
 
-from async_patterns.engine.base import Engine
+from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 from async_patterns.engine.models import EngineResult, RequestResult
 
 
-class SyncEngine(Engine):
-    """Synchronous HTTP request engine.
+class SyncEngine(SyncEngineProtocol):
+    """Synchronous HTTP request engine using the `requests` library.
 
-    This engine performs HTTP requests sequentially using the `requests` library.
-    It is used as the baseline for performance comparison.
+    This engine performs HTTP requests sequentially, serving as the baseline
+    for performance comparison with threaded and async engines.
 
     Attributes:
         name: Always returns "sync".
@@ -70,7 +70,6 @@ class SyncEngine(Engine):
         results: list[RequestResult] = []
         start_time = time.perf_counter()
 
-        # Start memory tracking
         tracemalloc.start()
 
         try:
@@ -79,10 +78,9 @@ class SyncEngine(Engine):
                     result = self._fetch_url(session, url)
                     results.append(result)
         finally:
-            # Capture peak memory
-            current, peak = tracemalloc.get_traced_memory()
+            _, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
-            peak_memory_mb = peak / (1024 * 1024)  # Convert to MB
+            peak_memory_mb = peak / (1024 * 1024)
 
         total_time = time.perf_counter() - start_time
 
@@ -126,6 +124,7 @@ class SyncEngine(Engine):
             url=url,
             status_code=status_code,
             latency_ms=latency_ms,
+            # Use epoch completion time to keep metrics consistent across engines.
             timestamp=time.time(),
             attempt=1,
             error=error,

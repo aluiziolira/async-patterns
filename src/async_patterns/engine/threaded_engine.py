@@ -1,33 +1,45 @@
-"""Threaded HTTP Engine.
+"""Threaded HTTP Engine using ThreadPoolExecutor and `requests` library.
 
-This module implements the threaded HTTP request engine using ThreadPoolExecutor
-and the `requests` library for concurrent data acquisition.
+This module implements concurrent HTTP requests using a thread pool,
+providing better performance than synchronous execution while maintaining
+simplicity.
 """
 
 from __future__ import annotations
 
+import contextlib
 import threading
 import time
 import tracemalloc
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import TYPE_CHECKING, Self
 
 import requests
 
-from async_patterns.engine.base import Engine
+from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 from async_patterns.engine.models import EngineResult, RequestResult
+
+if TYPE_CHECKING:
+    from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 
 
 class ThreadLocalSession(threading.local):
     """Thread-local session manager for connection pooling.
 
-    This class ensures each thread has its own requests Session for
-    proper connection pooling while maintaining thread safety.
+    Ensures each thread has its own requests Session for proper connection
+    pooling while maintaining thread safety.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        session_registry: list[requests.Session],
+        session_lock: threading.Lock,
+    ) -> None:
         """Initialize the thread-local session."""
         super().__init__()
         self.session: requests.Session | None = None
+        self._session_registry = session_registry
+        self._session_lock = session_lock
 
     def get_session(self) -> requests.Session:
         """Get or create a session for the current thread.
@@ -37,14 +49,22 @@ class ThreadLocalSession(threading.local):
         """
         if self.session is None:
             self.session = requests.Session()
+            with self._session_lock:
+                self._session_registry.append(self.session)
         return self.session
 
+    def close(self) -> None:
+        """Close the session for this thread."""
+        if self.session is not None:
+            self.session.close()
+            self.session = None
 
-class ThreadedEngine(Engine):
-    """Threaded HTTP request engine.
 
-    This engine performs HTTP requests concurrently using ThreadPoolExecutor.
-    It uses thread-local sessions for connection pooling.
+class ThreadedEngine(SyncEngineProtocol):
+    """Threaded HTTP request engine using ThreadPoolExecutor.
+
+    Performs HTTP requests concurrently using thread-local sessions for
+    connection pooling.
 
     Attributes:
         name: Always returns "threaded".
@@ -67,7 +87,36 @@ class ThreadedEngine(Engine):
         self._name = "threaded"
         self._max_workers = max_workers
         self._timeout = timeout
-        self._session_manager = ThreadLocalSession()
+        self._session_lock = threading.Lock()
+        self._sessions: list[requests.Session] = []
+        self._session_manager = ThreadLocalSession(self._sessions, self._session_lock)
+
+    def __enter__(self) -> Self:
+        """Enter sync context manager."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
+    ) -> None:
+        """Exit sync context manager, closing all sessions."""
+        self.close()
+
+    def close(self) -> None:
+        """Close all thread-local sessions."""
+        self._session_manager.close()
+        with self._session_lock:
+            sessions = list(self._sessions)
+            self._sessions.clear()
+        for session in sessions:
+            session.close()
+
+    def __del__(self) -> None:
+        """Safety net to close any remaining sessions."""
+        with contextlib.suppress(Exception):
+            self.close()
 
     @property
     def name(self) -> str:
@@ -108,22 +157,19 @@ class ThreadedEngine(Engine):
         results: list[RequestResult] = []
         start_time = time.perf_counter()
 
-        # Start memory tracking
         tracemalloc.start()
 
         try:
             with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
-                # Submit all tasks
                 futures = {executor.submit(self._fetch_url, url): url for url in urls}
 
-                # Collect results as they complete
                 for future in as_completed(futures):
                     url = futures[future]
                     try:
                         result = future.result()
                         results.append(result)
-                    except Exception as e:  # pylint: disable=broad-except
-                        # Handle any unexpected exceptions
+                    except Exception as e:
+                        # Preserve result counts by recording unexpected worker errors.
                         error_result = RequestResult(
                             url=url,
                             status_code=0,
@@ -134,10 +180,9 @@ class ThreadedEngine(Engine):
                         )
                         results.append(error_result)
         finally:
-            # Capture peak memory
-            current, peak = tracemalloc.get_traced_memory()
+            _, peak = tracemalloc.get_traced_memory()
             tracemalloc.stop()
-            peak_memory_mb = peak / (1024 * 1024)  # Convert to MB
+            peak_memory_mb = peak / (1024 * 1024)
 
         total_time = time.perf_counter() - start_time
 
@@ -150,7 +195,7 @@ class ThreadedEngine(Engine):
     def _fetch_url(self, url: str) -> RequestResult:
         """Fetch a single URL and return the result.
 
-        This method uses a thread-local session for connection pooling.
+        Uses a thread-local session for connection pooling.
 
         Args:
             url: The URL to fetch.
