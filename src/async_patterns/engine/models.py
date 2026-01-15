@@ -5,9 +5,11 @@ This module defines the core data structures used across all engine implementati
 
 from __future__ import annotations
 
+import json
 import statistics
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 
 class RequestStatus(str, Enum):
@@ -133,6 +135,44 @@ class EngineResult:
         result: float = val_f + (k - f) * (val_c - val_f)
         return result
 
+    @property
+    def error_breakdown(self) -> dict[str, int]:
+        """Breakdown of errors by type.
+
+        Returns:
+            Dictionary mapping error type to count.
+            Example: {"ConnectionError": 5, "TimeoutError": 3, "HTTP 500": 2}
+        """
+        breakdown: dict[str, int] = {}
+        for r in self.results:
+            if r.error:
+                # Extract error type from message
+                error_type = r.error.split(":")[0] if ":" in r.error else r.error
+                breakdown[error_type] = breakdown.get(error_type, 0) + 1
+            elif r.status_code >= 400:
+                key = f"HTTP {r.status_code}"
+                breakdown[key] = breakdown.get(key, 0) + 1
+        return breakdown
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert result to dictionary for serialization."""
+        return {
+            "total_requests": len(self.results),
+            "successful": self.success_count,
+            "failed": self.error_count,
+            "total_duration_seconds": self.total_time,
+            "requests_per_second": self.rps,
+            "p50_latency_ms": self.p50_latency_ms,
+            "p95_latency_ms": self.p95_latency_ms,
+            "p99_latency_ms": self.p99_latency_ms,
+            "peak_memory_mb": self.peak_memory_mb,
+            "error_breakdown": self.error_breakdown,
+        }
+
+    def to_json(self) -> str:
+        """Convert result to JSON string."""
+        return json.dumps(self.to_dict(), indent=2)
+
 
 @dataclass(frozen=True, slots=True)
 class ConnectionConfig:
@@ -146,14 +186,12 @@ class ConnectionConfig:
         timeout: Request timeout in seconds (default: 30.0).
         max_keepalive_connections: Maximum keep-alive connections to maintain (default: 20).
         keepalive_expiry: Seconds before closing idle keep-alive connections (default: 30.0).
-        http2: Enable HTTP/2 multiplexing for improved performance (default: True).
     """
 
     max_connections: int = 100
     timeout: float = 30.0
     max_keepalive_connections: int = 20
     keepalive_expiry: float = 30.0
-    http2: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,16 +201,20 @@ class RetryConfig:
     Implements the formula: delay = min(base_delay × 2^attempt + jitter, max_delay)
 
     Attributes:
-        max_retries: Maximum number of retry attempts (default: 3).
+        max_attempts: Total number of attempts including initial request (default: 3).
         base_delay: Base delay in seconds (default: 1.0).
         max_delay: Maximum delay cap in seconds (default: 60.0).
         jitter_factor: Jitter as fraction of delay (default: 0.1).
+        retry_budget: Maximum retries allowed per window (default: 10).
+        retry_budget_window_seconds: Window size in seconds (default: 60.0).
     """
 
-    max_retries: int = 3
+    max_attempts: int = 3
     base_delay: float = 1.0
     max_delay: float = 60.0
     jitter_factor: float = 0.1
+    retry_budget: int = 10
+    retry_budget_window_seconds: float = 60.0
 
     def calculate_delay(self, attempt: int) -> float:
         """Calculate delay for a given attempt number.
@@ -185,3 +227,56 @@ class RetryConfig:
         """
         delay: float = self.base_delay * (2 ** (attempt - 1))
         return float(min(delay, self.max_delay))
+
+
+@dataclass(frozen=True, slots=True)
+class ExecutionReport:
+    """Benchmark execution report with PRD-compliant latency and resource metrics.
+
+    This dataclass is immutable (frozen=True) and uses slots for memory efficiency.
+
+    Attributes:
+        total_requests: Total number of requests made.
+        successful: Number of successful requests (2xx status codes).
+        failed: Number of failed requests.
+        total_duration_seconds: Total benchmark duration in seconds.
+        requests_per_second: Throughput in requests per second.
+        avg_latency_ms: Average latency in milliseconds.
+        p50_latency_ms: Median latency in milliseconds.
+        p95_latency_ms: 95th percentile latency in milliseconds.
+        p99_latency_ms: 99th percentile latency in milliseconds.
+        peak_memory_mb: Peak memory usage in megabytes.
+        error_breakdown: Dictionary mapping error type to count.
+    """
+
+    total_requests: int
+    successful: int
+    failed: int
+    total_duration_seconds: float
+    requests_per_second: float
+    avg_latency_ms: float
+    p50_latency_ms: float
+    p95_latency_ms: float
+    p99_latency_ms: float
+    peak_memory_mb: float
+    error_breakdown: dict[str, int]
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert report to dictionary for JSON serialization.
+
+        Returns:
+            Dictionary representation of the execution report.
+        """
+        return {
+            "total_requests": self.total_requests,
+            "successful": self.successful,
+            "failed": self.failed,
+            "total_duration_seconds": self.total_duration_seconds,
+            "requests_per_second": self.requests_per_second,
+            "avg_latency_ms": self.avg_latency_ms,
+            "p50_latency_ms": self.p50_latency_ms,
+            "p95_latency_ms": self.p95_latency_ms,
+            "p99_latency_ms": self.p99_latency_ms,
+            "peak_memory_mb": self.peak_memory_mb,
+            "error_breakdown": self.error_breakdown,
+        }
