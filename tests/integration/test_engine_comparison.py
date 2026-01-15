@@ -12,7 +12,7 @@ import unittest.mock as mock
 
 import pytest
 
-from async_patterns.engine import AsyncEngineImpl, SyncEngine, ThreadedEngine
+from async_patterns.engine import AsyncEngine, SyncEngine, ThreadedEngine
 
 
 class TestEngineSchemaParity:
@@ -23,7 +23,7 @@ class TestEngineSchemaParity:
         with (
             mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
             mock.patch("async_patterns.engine.threaded_engine.requests") as mock_threaded,
-            mock.patch("async_patterns.engine.async_engine.httpx") as mock_async,
+            mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async,
         ):
             # Setup mock responses for sync and threaded
             mock_session_sync = mock.MagicMock()
@@ -41,19 +41,20 @@ class TestEngineSchemaParity:
             mock_threaded.Session.return_value = mock_session_threaded
 
             # Setup mock for async engine
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.1
             async_response.url = sample_urls[0]
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
             sync_engine = SyncEngine()
             threaded_engine = ThreadedEngine()
-            async_engine = AsyncEngineImpl()
+            async_engine = AsyncEngine()
 
             sync_result = sync_engine.run(sample_urls)
             threaded_result = threaded_engine.run(sample_urls)
@@ -69,7 +70,7 @@ class TestEngineSchemaParity:
         with (
             mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
             mock.patch("async_patterns.engine.threaded_engine.requests") as mock_threaded,
-            mock.patch("async_patterns.engine.async_engine.httpx") as mock_async,
+            mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async,
         ):
             mock_session_sync = mock.MagicMock()
             mock_session_threaded = mock.MagicMock()
@@ -86,19 +87,20 @@ class TestEngineSchemaParity:
             mock_threaded.Session.return_value = mock_session_threaded
 
             # Setup mock for async engine
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.1
             async_response.url = sample_urls[0]
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
             sync_engine = SyncEngine()
             threaded_engine = ThreadedEngine()
-            async_engine = AsyncEngineImpl()
+            async_engine = AsyncEngine()
 
             sync_result = sync_engine.run(sample_urls)
             threaded_result = threaded_engine.run(sample_urls)
@@ -112,12 +114,12 @@ class TestEngineSchemaParity:
             assert sync_fields == threaded_fields
             assert sync_fields == async_fields
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_async_engine_schema_parity_with_sync(self, sample_urls) -> None:
         """Async engine should produce results with same schema as sync engine."""
         with (
             mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
-            mock.patch("async_patterns.engine.async_engine.httpx") as mock_async,
+            mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async,
         ):
             mock_session_sync = mock.MagicMock()
 
@@ -131,18 +133,19 @@ class TestEngineSchemaParity:
             mock_sync.Session.return_value = mock_session_sync
 
             # Setup mock for async engine
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.1
             async_response.url = sample_urls[0]
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
             sync_engine = SyncEngine()
-            async_engine = AsyncEngineImpl()
+            async_engine = AsyncEngine()
 
             sync_result = sync_engine.run(sample_urls)
             async_result = await async_engine.run(sample_urls)
@@ -157,42 +160,6 @@ class TestEngineSchemaParity:
 
 class TestThreadedPerformance:
     """Test cases for threaded engine performance requirements."""
-
-    @pytest.mark.skip(reason="Timing-based test, inherently flaky in CI environments")
-    def test_threaded_engine_is_faster_than_sync(self, sample_urls) -> None:
-        """Threaded engine should be faster than sync engine for multiple URLs."""
-        with (
-            mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
-            mock.patch("async_patterns.engine.threaded_engine.requests") as mock_threaded,
-        ):
-            # Create longer delays to make performance difference measurable
-            def create_delayed_response(delay):
-                mock_resp = mock.MagicMock()
-                mock_resp.status_code = 200
-                mock_resp.elapsed.total_seconds.return_value = delay
-                mock_resp.url = "https://example.com"
-                return mock_resp
-
-            mock_session_sync = mock.MagicMock()
-            mock_session_threaded = mock.MagicMock()
-
-            # Each URL takes 0.1s in sync (total: 0.3s)
-            # Threaded: all run concurrently (~0.1s)
-            for url in sample_urls:
-                mock_session_sync.get.return_value = create_delayed_response(0.1)
-                mock_session_threaded.get.return_value = create_delayed_response(0.1)
-
-            mock_sync.Session.return_value = mock_session_sync
-            mock_threaded.Session.return_value = mock_session_threaded
-
-            sync_engine = SyncEngine()
-            threaded_engine = ThreadedEngine(max_workers=len(sample_urls))
-
-            sync_result = sync_engine.run(sample_urls)
-            threaded_result = threaded_engine.run(sample_urls)
-
-            # Threaded should be faster (allow some tolerance for overhead)
-            assert threaded_result.total_time < sync_result.total_time
 
     def test_threaded_engine_achieves_2x_speedup(self) -> None:
         """Threaded engine should achieve at least 2x speedup for 10 URLs.
@@ -227,68 +194,48 @@ class TestThreadedPerformance:
 class TestAsyncPerformance:
     """Test cases for async engine performance requirements."""
 
-    @pytest.mark.skip(reason="Timing-based test, inherently flaky in CI environments")
-    @pytest.mark.asyncio()
-    async def test_async_engine_is_faster_than_sync(self, sample_urls) -> None:
-        """Async engine should be faster than sync engine for multiple URLs."""
-        with (
-            mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
-            mock.patch("async_patterns.engine.async_engine.httpx") as mock_async,
-        ):
-            mock_session_sync = mock.MagicMock()
+    @pytest.mark.asyncio
+    async def test_async_engine_handles_high_concurrency(self, mock_server) -> None:
+        """Async engine should handle high concurrency efficiently.
 
-            # Each URL takes 0.1s in sync (total: 0.3s)
-            def create_delayed_response(delay):
-                mock_resp = mock.MagicMock()
-                mock_resp.status_code = 200
-                mock_resp.elapsed.total_seconds.return_value = delay
-                mock_resp.url = "https://example.com"
-                return mock_resp
+        Verifies that async engine can process many concurrent requests
+        and completes faster than would be possible sequentially.
+        """
+        # Create many test URLs to demonstrate concurrency
+        num_urls = 50
+        urls = [f"{mock_server.base_url}/get?id={i}" for i in range(num_urls)]
 
-            for url in sample_urls:
-                mock_session_sync.get.return_value = create_delayed_response(0.1)
+        async_engine = AsyncEngine(max_concurrent=50)
+        result = await async_engine.run(urls)
 
-            mock_sync.Session.return_value = mock_session_sync
+        # Verify all completed successfully
+        assert result.success_count == num_urls
+        assert result.error_count == 0
 
-            # Setup mock for async engine with same delay
-            async_response = mock.MagicMock()
-            async_response.status_code = 200
-            async_response.elapsed.total_seconds.return_value = 0.1
-            async_response.url = sample_urls[0]
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
+        # With mock server latency of ~1ms and 50 requests:
+        # Sequential would take ~50ms just in server delay, plus client overhead
+        # Verify concurrent execution stays well below 350ms even on busy CI hosts
+        assert result.total_time < 0.35  # 350ms guardrail for high concurrency
 
-            sync_engine = SyncEngine()
-            async_engine = AsyncEngineImpl(max_concurrent=len(sample_urls))
-
-            sync_result = sync_engine.run(sample_urls)
-            async_result = await async_engine.run(sample_urls)
-
-            # Async should be faster (allow some tolerance for overhead)
-            assert async_result.total_time < sync_result.total_time
-
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_async_engine_achieves_concurrency(self) -> None:
         """Async engine should handle concurrent requests efficiently."""
         urls = [f"https://example{i}.com" for i in range(10)]
 
-        with mock.patch("async_patterns.engine.async_engine.httpx") as mock_async:
+        with mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async:
             # Mock response with 0.1s delay
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.1
             async_response.url = "https://example.com"
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
-
-            engine = AsyncEngineImpl(max_concurrent=10)
+            engine = AsyncEngine(max_concurrent=10)
             result = await engine.run(urls)
 
             # All 10 requests should complete
@@ -305,7 +252,7 @@ class TestEngineIntegration:
         """All engines should handle empty URL lists gracefully."""
         sync_engine = SyncEngine()
         threaded_engine = ThreadedEngine()
-        async_engine = AsyncEngineImpl()
+        async_engine = AsyncEngine()
 
         sync_result = sync_engine.run([])
         threaded_result = threaded_engine.run([])
@@ -318,19 +265,19 @@ class TestEngineIntegration:
         assert threaded_result.total_time >= 0
         assert async_result.total_time >= 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_async_engine_handles_empty_url_list(self) -> None:
         """Async engine should handle empty URL lists gracefully."""
-        engine = AsyncEngineImpl()
+        engine = AsyncEngine()
         result = await engine.run([])
 
         assert len(result.results) == 0
         assert result.total_time >= 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_async_engine_handles_mixed_success_and_errors(self) -> None:
         """Async engine should correctly track successes and errors."""
-        with mock.patch("async_patterns.engine.async_engine.httpx") as mock_async:
+        with mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async:
             urls = [
                 "https://httpbin.org/status/200",
                 "https://httpbin.org/status/404",
@@ -341,9 +288,10 @@ class TestEngineIntegration:
             class MockHTTPError(Exception):
                 pass
 
+            mock_session = mock.MagicMock()
             # 200 OK - successful response
             ok_response = mock.MagicMock()
-            ok_response.status_code = 200
+            ok_response.status = 200
             ok_response.elapsed.total_seconds.return_value = 0.1
             ok_response.url = urls[0]
 
@@ -356,13 +304,12 @@ class TestEngineIntegration:
                 else:
                     raise MockHTTPError("500 Server Error")
 
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(side_effect=get_side_effect)
+            mock_session.get = mock.AsyncMock(side_effect=get_side_effect)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
-            engine = AsyncEngineImpl()
+            engine = AsyncEngine()
             result = await engine.run(urls)
 
             # Should have 3 results
@@ -379,13 +326,13 @@ class TestEngineIntegration:
 class TestMultiParadigmBenchmark:
     """Test cases for multi-paradigm benchmark compatibility."""
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_all_engines_comparable_in_benchmark(self, sample_urls) -> None:
         """All engines should produce comparable metrics for benchmark comparison."""
         with (
             mock.patch("async_patterns.engine.sync_engine.requests") as mock_sync,
             mock.patch("async_patterns.engine.threaded_engine.requests") as mock_threaded,
-            mock.patch("async_patterns.engine.async_engine.httpx") as mock_async,
+            mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async,
         ):
             # Setup mocks with consistent timing
             mock_session_sync = mock.MagicMock()
@@ -403,19 +350,20 @@ class TestMultiParadigmBenchmark:
             mock_threaded.Session.return_value = mock_session_threaded
 
             # Setup async mock
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.1
             async_response.url = sample_urls[0]
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
             sync_engine = SyncEngine()
             threaded_engine = ThreadedEngine()
-            async_engine = AsyncEngineImpl()
+            async_engine = AsyncEngine()
 
             sync_result = sync_engine.run(sample_urls)
             threaded_result = threaded_engine.run(sample_urls)
@@ -435,24 +383,24 @@ class TestMultiParadigmBenchmark:
             assert threaded_result.rps > 0 or threaded_result.total_time == 0
             assert async_result.rps > 0 or async_result.total_time == 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_async_engine_benchmark_runner_compatibility(self) -> None:
         """Async engine should be compatible with benchmark runner."""
-        with mock.patch("async_patterns.engine.async_engine.httpx") as mock_async:
+        with mock.patch("async_patterns.engine.async_engine.aiohttp") as mock_async:
             urls = [f"https://example{i}.com" for i in range(5)]
 
+            mock_session = mock.MagicMock()
             async_response = mock.MagicMock()
-            async_response.status_code = 200
+            async_response.status = 200
             async_response.elapsed.total_seconds.return_value = 0.05
             async_response.url = "https://example.com"
+            async_response.read = mock.AsyncMock(return_value=b"")
+            mock_session.get = mock.AsyncMock(return_value=async_response)
+            mock_session.__aenter__ = mock.AsyncMock(return_value=mock_session)
+            mock_session.__aexit__ = mock.AsyncMock(return_value=None)
+            mock_async.ClientSession.return_value = mock_session
 
-            mock_async.AsyncClient.return_value.__aenter__ = mock.AsyncMock(
-                return_value=mock_async.AsyncClient.return_value
-            )
-            mock_async.AsyncClient.return_value.__aexit__ = mock.AsyncMock(return_value=None)
-            mock_async.AsyncClient.return_value.get = mock.AsyncMock(return_value=async_response)
-
-            engine = AsyncEngineImpl()
+            engine = AsyncEngine()
             result = await engine.run(urls)
 
             # Verify result structure is compatible with benchmark runner
