@@ -1,7 +1,4 @@
-"""Base Protocol for benchmark engines.
-
-This module defines the Engine protocol that all engine implementations must follow.
-"""
+"""Base Protocols for benchmark engines."""
 
 from __future__ import annotations
 
@@ -11,21 +8,8 @@ from async_patterns.engine.models import EngineResult
 
 
 @runtime_checkable
-class Engine(Protocol):
-    """Protocol defining the interface for benchmark engines.
-
-    All engine implementations (sync, threaded, async) must conform to this protocol.
-    The @runtime_checkable decorator enables isinstance() checks for protocol conformance.
-
-    Attributes:
-        name: A string identifier for the engine type (e.g., "sync", "threaded").
-
-    Example:
-        >>> from async_patterns.engine.base import Engine
-        >>> from async_patterns.engine import SyncEngine
-        >>> isinstance(SyncEngine(), Engine)
-        True
-    """
+class SyncEngine(Protocol):
+    """Protocol defining the interface for synchronous benchmark engines."""
 
     @property
     def name(self) -> str:
@@ -46,3 +30,20 @@ class Engine(Protocol):
             An EngineResult containing all individual request results and aggregate metrics.
         """
         ...
+
+
+@runtime_checkable
+class AsyncEngine(Protocol):
+    """Protocol defining the interface for asynchronous benchmark engines."""
+
+    @property
+    def name(self) -> str:
+        """Name of the engine implementation."""
+        ...
+
+    async def run(self, urls: list[str]) -> EngineResult:
+        """Execute HTTP requests for the given URLs."""
+        ...
+
+
+type Engine = SyncEngine | AsyncEngine

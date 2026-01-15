@@ -1,8 +1,9 @@
 """Benchmark engines for HTTP request performance comparison."""
 
-from async_patterns.engine.async_base import AsyncEngine
-from async_patterns.engine.async_engine import AsyncEngineImpl, PoolingStrategy
+from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
+from async_patterns.engine.base import AsyncEngine as AsyncEngineProtocol
 from async_patterns.engine.base import Engine
+from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 from async_patterns.engine.models import (
     ConnectionConfig,
     EngineResult,
@@ -14,7 +15,7 @@ from async_patterns.engine.threaded_engine import ThreadedEngine
 
 __all__ = [
     "AsyncEngine",
-    "AsyncEngineImpl",
+    "AsyncEngineProtocol",
     "ConnectionConfig",
     "Engine",
     "EngineResult",
@@ -22,5 +23,6 @@ __all__ = [
     "RequestResult",
     "RequestStatus",
     "SyncEngine",
+    "SyncEngineProtocol",
     "ThreadedEngine",
 ]
