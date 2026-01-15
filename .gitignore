@@ -13,7 +13,6 @@ wheelhouse/
 
 # === Poetry ===
 .venv/
-poetry.lock
 
 # === pytest ===
 .pytest_cache/
