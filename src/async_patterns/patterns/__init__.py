@@ -5,7 +5,6 @@ from async_patterns.patterns.circuit_breaker import (
     CircuitBreakerError,
     CircuitBreakerMetrics,
     CircuitState,
-    parse_retry_after,
 )
 from async_patterns.patterns.pipeline import (
     BatchedWriter,
@@ -31,7 +30,6 @@ __all__ = [
     "CircuitBreakerError",
     "CircuitBreakerMetrics",
     "CircuitState",
-    "parse_retry_after",
     # Pipeline
     "BatchedWriter",
     "PipelineMetrics",

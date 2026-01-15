@@ -18,6 +18,7 @@ class SemaphoreMetrics:
     current_active: int
     peak_active: int
     total_acquisitions: int
+    max_concurrent: int
     timeout_count: int = field(default=0)
 
 
@@ -127,5 +128,23 @@ class SemaphoreLimiter:
             current_active=self._current_active,
             peak_active=self._peak_active,
             total_acquisitions=self._total_acquisitions,
+            max_concurrent=self._max_concurrent,
             timeout_count=self._timeout_count,
         )
+
+    def set_max_concurrent(self, new_limit: int) -> None:
+        """Set the maximum number of concurrent operations allowed at runtime.
+
+        This method recreates the underlying semaphore with the new limit.
+        Note: This does not affect currently active operations.
+
+        Args:
+            new_limit: The new maximum number of concurrent operations.
+
+        Raises:
+            ValueError: If new_limit is less than 1.
+        """
+        if new_limit < 1:
+            raise ValueError("max_concurrent must be at least 1")
+        self._max_concurrent = new_limit
+        self._semaphore = asyncio.Semaphore(new_limit)
