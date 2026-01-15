@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from async_patterns.engine import EngineResult, RequestResult, ThreadedEngine
-from async_patterns.engine.base import Engine
+from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 
 
 class TestThreadedEngineProtocol:
@@ -20,7 +20,7 @@ class TestThreadedEngineProtocol:
     def test_threaded_engine_implements_engine_protocol(self) -> None:
         """ThreadedEngine should be an instance of Engine protocol."""
         engine = ThreadedEngine()
-        assert isinstance(engine, Engine)
+        assert isinstance(engine, SyncEngineProtocol)
 
     def test_threaded_engine_has_name_property(self) -> None:
         """ThreadedEngine should have name 'threaded'."""
@@ -41,7 +41,7 @@ class TestThreadedEngineProtocol:
 class TestThreadedEngineRun:
     """Test cases for ThreadedEngine.run() method."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_thread_pool(self):
         """Create a mock ThreadPoolExecutor."""
         with patch("async_patterns.engine.threaded_engine.ThreadPoolExecutor") as mock_tpe:
@@ -165,11 +165,34 @@ class TestThreadedEngineRun:
                 assert len(result.results) == 1
                 assert result.results[0].status_code == 200
 
+    def test_threaded_engine_close_closes_all_thread_sessions(self) -> None:
+        """ThreadedEngine.close should close sessions created in worker threads."""
+        sessions: list[MagicMock] = []
+
+        def make_session() -> MagicMock:
+            session = MagicMock()
+            response = MagicMock()
+            response.status_code = 200
+            response.raise_for_status = MagicMock()
+            session.get.return_value = response
+            sessions.append(session)
+            return session
+
+        with patch(
+            "async_patterns.engine.threaded_engine.requests.Session", side_effect=make_session
+        ):
+            engine = ThreadedEngine(max_workers=2)
+            engine.run([f"https://example.com/{i}" for i in range(4)])
+            engine.close()
+
+        assert sessions, "Expected at least one session to be created"
+        assert all(session.close.called for session in sessions)
+
 
 class TestThreadedEngineConcurrency:
     """Test cases for ThreadedEngine concurrency behavior."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_executor(self):
         """Create a mock ThreadPoolExecutor context manager."""
         with patch("async_patterns.engine.threaded_engine.ThreadPoolExecutor") as mock_tpe:
@@ -220,7 +243,7 @@ class TestThreadedEngineConcurrency:
 class TestThreadedEngineErrorHandling:
     """Test cases for ThreadedEngine error handling."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_executor(self):
         """Create a mock ThreadPoolExecutor context manager."""
         with patch("async_patterns.engine.threaded_engine.ThreadPoolExecutor") as mock_tpe:

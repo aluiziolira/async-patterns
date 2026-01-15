@@ -1,4 +1,4 @@
-"""Unit tests for AsyncEngine core implementation.
+"""Unit tests for AsyncEngine core implementation using aiohttp.
 
 Tests cover:
 - Protocol conformance
@@ -10,28 +10,23 @@ Tests cover:
 from __future__ import annotations
 
 import asyncio
+import time
 import tracemalloc
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from async_patterns.engine.async_base import AsyncEngine
-from async_patterns.engine.models import ConnectionConfig, EngineResult
+from async_patterns.engine.async_engine import AsyncEngine
+from async_patterns.engine.models import ConnectionConfig, EngineResult, RequestResult
 
 
 class TestAsyncEngineProtocol:
     """Tests for AsyncEngine protocol conformance."""
 
     def test_async_engine_protocol_exists(self) -> None:
-        """Verify AsyncEngine protocol can be imported."""
+        """Verify AsyncEngine class can be imported."""
 
         assert AsyncEngine is not None
-
-    def test_async_engine_is_runtime_checkable_protocol(self) -> None:
-        """Verify AsyncEngine is a runtime_checkable protocol."""
-
-        # Protocol should be runtime_checkable for isinstance checks
-        assert hasattr(AsyncEngine, "__protocol_attrs__")
 
 
 class TestAsyncEngineInitialization:
@@ -64,28 +59,28 @@ class TestAsyncEngineInitialization:
 class TestAsyncEngineRun:
     """Tests for AsyncEngine.run() method."""
 
-    @pytest.fixture()
-    def mock_httpx_response(self) -> MagicMock:
-        """Create a mock httpx response."""
+    @pytest.fixture
+    def mock_aiohttp_response(self) -> MagicMock:
+        """Create a mock aiohttp response."""
         response = MagicMock()
-        response.status_code = 200
+        response.status = 200
         response.headers = {"content-type": "application/json"}
-        response.text = '{"status": "ok"}'
-        response.elapsed.total_seconds.return_value = 0.05
+        response.read = AsyncMock(return_value=b"")
+        response.text = AsyncMock(return_value='{"status": "ok"}')
         return response
 
-    @pytest.mark.asyncio()
-    async def test_run_returns_engine_result(self, mock_httpx_response: MagicMock) -> None:
+    @pytest.mark.asyncio
+    async def test_run_returns_engine_result(self, mock_aiohttp_response: MagicMock) -> None:
         """Test run() returns valid EngineResult."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.return_value = mock_httpx_response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.get.return_value = mock_aiohttp_response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com"])
 
@@ -93,7 +88,7 @@ class TestAsyncEngineRun:
             assert len(result.results) == 1
             assert result.total_time >= 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_run_with_multiple_urls(self) -> None:
         """Test run() with multiple URLs returns all results."""
         from async_patterns.engine.async_engine import AsyncEngine
@@ -101,36 +96,36 @@ class TestAsyncEngineRun:
         engine = AsyncEngine(max_concurrent=10)
         urls = [f"https://example{i}.com" for i in range(5)]
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             for url in urls:
                 response = MagicMock()
-                response.status_code = 200
-                response.elapsed.total_seconds.return_value = 0.05
-                mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+                response.status = 200
+                response.read = AsyncMock(return_value=b"")
+                mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(urls)
 
             assert isinstance(result, EngineResult)
             assert len(result.results) == 5
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_run_handles_http_errors(self) -> None:
         """Test run() handles HTTP error responses correctly."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 404
-            response.elapsed.total_seconds.return_value = 0.03
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 404
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com/notfound"])
 
@@ -138,18 +133,18 @@ class TestAsyncEngineRun:
             assert len(result.results) == 1
             assert result.results[0].status_code == 404
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_run_handles_exceptions(self) -> None:
         """Test run() handles exceptions during request."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client.get.side_effect = Exception("Connection failed")
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.get.side_effect = Exception("Connection failed")
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com"])
 
@@ -158,31 +153,88 @@ class TestAsyncEngineRun:
             assert result.results[0].error is not None
             assert "Connection failed" in result.results[0].error
 
+    @pytest.mark.asyncio
+    async def test_run_collects_worker_errors(self) -> None:
+        """Test run() records error results when workers hit unexpected exceptions."""
+        from async_patterns.engine.async_engine import AsyncEngine
+
+        engine = AsyncEngine(max_concurrent=2)
+        urls = [
+            "https://example.com/ok",
+            "https://example.com/fail",
+            "https://example.com/ok2",
+        ]
+
+        async def fake_fetch(_session: object, url: str) -> RequestResult:
+            if "fail" in url:
+                raise RuntimeError("worker boom")
+            return RequestResult(
+                url=url,
+                status_code=200,
+                latency_ms=1.0,
+                timestamp=time.time(),
+                attempt=1,
+                error=None,
+            )
+
+        engine._fetch_url = AsyncMock(side_effect=fake_fetch)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            result = await engine.run(urls)
+
+        assert len(result.results) == len(urls)
+        error_results = [res for res in result.results if res.error is not None]
+        assert len(error_results) == 1
+        assert error_results[0].status_code == 0
+
+    @pytest.mark.asyncio
+    async def test_run_sets_epoch_timestamp(self, mock_aiohttp_response: MagicMock) -> None:
+        """Test RequestResult timestamp is a Unix epoch completion time."""
+        from async_patterns.engine.async_engine import AsyncEngine
+
+        engine = AsyncEngine()
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.get.return_value = mock_aiohttp_response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            start_time = time.time()
+            result = await engine.run(["https://example.com"])
+            end_time = time.time()
+
+        assert start_time <= result.results[0].timestamp <= end_time
+
 
 class TestAsyncEngineMemoryProfiling:
     """Tests for memory profiling with tracemalloc."""
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_peak_memory_mb_populated(self) -> None:
         """Test EngineResult.peak_memory_mb is populated correctly."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 200
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com"])
 
             assert result.peak_memory_mb >= 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_memory_tracking_with_tracemalloc(self) -> None:
         """Test that tracemalloc is used for memory tracking."""
         from async_patterns.engine.async_engine import AsyncEngine
@@ -193,14 +245,14 @@ class TestAsyncEngineMemoryProfiling:
         tracemalloc.start()
 
         try:
-            with patch("httpx.AsyncClient") as mock_client_class:
-                mock_client = AsyncMock()
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_session = AsyncMock()
                 response = MagicMock()
-                response.status_code = 200
-                response.elapsed.total_seconds.return_value = 0.05
-                mock_client.get.return_value = response
-                mock_client_class.return_value.__aenter__.return_value = mock_client
-                mock_client_class.return_value.__aexit__.return_value = None
+                response.status = 200
+                response.read = AsyncMock(return_value=b"")
+                mock_session.get.return_value = response
+                mock_session_class.return_value.__aenter__.return_value = mock_session
+                mock_session_class.return_value.__aexit__.return_value = None
 
                 result = await engine.run(["https://example.com"])
 
@@ -213,21 +265,21 @@ class TestAsyncEngineMemoryProfiling:
 class TestAsyncEngineSemaphore:
     """Tests for SemaphoreLimiter integration."""
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_uses_semaphore_for_concurrency(self) -> None:
         """Test that SemaphoreLimiter is used for bounded concurrency."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine(max_concurrent=5)
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 200
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             urls = [f"https://example{i}.com" for i in range(10)]
             result = await engine.run(urls)
@@ -242,7 +294,7 @@ class TestAsyncEngineSemaphore:
         engine = AsyncEngine(max_concurrent=25)
         assert engine._limiter.max_concurrent == 25
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_semaphore_acquired_per_request(self) -> None:
         """Test that semaphore is acquired per request, not per batch."""
         from async_patterns.engine.async_engine import AsyncEngine
@@ -251,8 +303,8 @@ class TestAsyncEngineSemaphore:
         max_concurrent = 5
         num_urls = 20
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
 
             # Create a real TaskGroup to track concurrent executions
             active_count = 0
@@ -278,13 +330,13 @@ class TestAsyncEngineSemaphore:
                 active_count -= 1
 
                 response = MagicMock()
-                response.status_code = 200
-                response.elapsed.total_seconds.return_value = 0.05
+                response.status = 200
+                response.read = AsyncMock(return_value=b"")
                 return response
 
-            mock_client.get = mock_get
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            mock_session.get = mock_get
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             urls = [f"https://example{i}.com" for i in range(num_urls)]
             result = await engine.run(urls)
@@ -310,294 +362,25 @@ class TestAsyncEngineName:
         assert engine.name == "async_engine"
 
 
-class TestAsyncEngineTaskGroupExceptionHandling:
-    """Tests for TaskGroup exception handling coverage."""
-
-    @pytest.mark.asyncio()
-    async def test_run_naive_taskgroup_exception_handling(self) -> None:
-        """Test NAIVE strategy TaskGroup exception handling block (lines 176-180)."""
-        from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
-
-        engine = AsyncEngine(max_concurrent=5, pooling_strategy=PoolingStrategy.NAIVE)
-
-        # Create a mock task that has an exception
-        mock_task_with_exception = AsyncMock()
-        mock_task_with_exception.exception.return_value = ValueError("Task error")
-        mock_task_with_exception.done.return_value = True
-        mock_task_with_exception.cancelled.return_value = False
-
-        # Mock TaskGroup that raises ExceptionGroup
-        original_task_group = asyncio.TaskGroup
-
-        class MockedTaskGroup:
-            def __init__(self, *args, **kwargs):
-                self.tasks = [mock_task_with_exception]
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                raise ExceptionGroup("TaskGroup error", [ValueError("Task error")])
-
-            def create_task(self, coro):
-                return mock_task_with_exception
-
-        with (
-            patch.object(asyncio, "TaskGroup", MockedTaskGroup),
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
-            mock_client = AsyncMock()
-            response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
-
-            # Should not raise, should handle exception gracefully
-            result = await engine.run(["https://example.com"])
-
-            assert isinstance(result, EngineResult)
-            # Exception handling should allow graceful continuation
-            assert result.total_time >= 0
-
-    @pytest.mark.asyncio()
-    async def test_run_optimized_taskgroup_exception_handling(self) -> None:
-        """Test OPTIMIZED strategy TaskGroup exception handling block (lines 218-222)."""
-        from async_patterns.engine.async_engine import AsyncEngine
-
-        engine = AsyncEngine()
-
-        # Create mock tasks - one with exception, one without
-        mock_task_with_exception = AsyncMock()
-        mock_task_with_exception.exception.return_value = RuntimeError("Network error")
-        mock_task_with_exception.done.return_value = True
-        mock_task_with_exception.cancelled.return_value = False
-
-        mock_task_success = AsyncMock()
-        mock_task_success.exception.return_value = None
-        mock_task_success.done.return_value = True
-        mock_task_success.cancelled.return_value = False
-
-        class MockedTaskGroup:
-            def __init__(self, *args, **kwargs):
-                self.tasks = [mock_task_with_exception, mock_task_success]
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                raise ExceptionGroup("Multiple errors", [RuntimeError("Network error")])
-
-            def create_task(self, coro):
-                return mock_task_with_exception if "error" in str(coro) else mock_task_success
-
-        with (
-            patch.object(asyncio, "TaskGroup", MockedTaskGroup),
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
-            mock_client = AsyncMock()
-            response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
-
-            # Should not raise, should handle exception gracefully
-            result = await engine.run(["https://example1.com", "https://example2.com"])
-
-            assert isinstance(result, EngineResult)
-            # Exception handling should allow graceful continuation
-            assert result.total_time >= 0
-
-    @pytest.mark.asyncio()
-    async def test_taskgroup_exception_block_iterates_tasks(self) -> None:
-        """Test that exception block properly iterates through tasks with exceptions."""
-        from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
-
-        engine = AsyncEngine(max_concurrent=3, pooling_strategy=PoolingStrategy.NAIVE)
-
-        # Create multiple mock tasks with exceptions
-        mock_tasks = []
-        for i in range(3):
-            task = AsyncMock()
-            task.exception.return_value = Exception(f"Error {i}")
-            task.done.return_value = True
-            task.cancelled.return_value = False
-            mock_tasks.append(task)
-
-        call_count = [0]
-
-        class MockedTaskGroup:
-            def __init__(self, *args, **kwargs):
-                self.tasks = mock_tasks
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                # Simulate multiple exceptions
-                raise ExceptionGroup(
-                    "Multiple task errors",
-                    [
-                        Exception("Error 0"),
-                        Exception("Error 1"),
-                        Exception("Error 2"),
-                    ],
-                )
-
-            def create_task(self, coro):
-                task = mock_tasks[call_count[0]]
-                call_count[0] += 1
-                return task
-
-        with (
-            patch.object(asyncio, "TaskGroup", MockedTaskGroup),
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
-            mock_client = AsyncMock()
-            response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
-
-            # Should handle multiple task exceptions
-            result = await engine.run(
-                [
-                    "https://example1.com",
-                    "https://example2.com",
-                    "https://example3.com",
-                ]
-            )
-
-            assert isinstance(result, EngineResult)
-            # All exception handling should complete
-            assert result.total_time >= 0
-            # Verify all tasks' exception() was called (iterated in except* block)
-            for task in mock_tasks:
-                task.exception.assert_called()
-
-    @pytest.mark.asyncio()
-    async def test_naive_exception_handling_with_mixed_results(self) -> None:
-        """Test NAIVE strategy with mix of successful and failed tasks."""
-        from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
-
-        engine = AsyncEngine(max_concurrent=5, pooling_strategy=PoolingStrategy.NAIVE)
-
-        # Create tasks: one raises, one succeeds
-        error_task = AsyncMock()
-        error_task.exception.return_value = ConnectionError("Failed")
-        error_task.done.return_value = True
-        error_task.cancelled.return_value = False
-
-        success_task = AsyncMock()
-        success_task.exception.return_value = None
-        success_task.done.return_value = True
-        success_task.cancelled.return_value = False
-
-        class MockedTaskGroup:
-            def __init__(self, *args, **kwargs):
-                self.tasks = [error_task, success_task]
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                raise ExceptionGroup("Mixed results", [ConnectionError("Failed")])
-
-            def create_task(self, coro):
-                return error_task
-
-        with (
-            patch.object(asyncio, "TaskGroup", MockedTaskGroup),
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
-            mock_client = AsyncMock()
-            response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
-
-            result = await engine.run(["https://error.com", "https://success.com"])
-
-            assert isinstance(result, EngineResult)
-            assert result.total_time >= 0
-            # Verify exception() was called on error task
-            error_task.exception.assert_called()
-
-    @pytest.mark.asyncio()
-    async def test_optimized_exception_handling_with_exception_group(self) -> None:
-        """Test OPTIMIZED strategy with ExceptionGroup containing multiple exceptions."""
-        from async_patterns.engine.async_engine import AsyncEngine
-
-        engine = AsyncEngine()
-
-        mock_task = AsyncMock()
-        mock_task.exception.return_value = TimeoutError("Timeout")
-        mock_task.done.return_value = True
-        mock_task.cancelled.return_value = False
-
-        class MockedTaskGroup:
-            def __init__(self, *args, **kwargs):
-                self.tasks = [mock_task]
-
-            async def __aenter__(self):
-                return self
-
-            async def __aexit__(self, *args):
-                # Create ExceptionGroup with multiple exceptions
-                raise ExceptionGroup(
-                    "Request failures",
-                    [TimeoutError("Timeout"), ConnectionError("Dropped")],
-                )
-
-            def create_task(self, coro):
-                return mock_task
-
-        with (
-            patch.object(asyncio, "TaskGroup", MockedTaskGroup),
-            patch("httpx.AsyncClient") as mock_client_class,
-        ):
-            mock_client = AsyncMock()
-            response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
-
-            result = await engine.run(["https://example.com"])
-
-            assert isinstance(result, EngineResult)
-            assert result.total_time >= 0
-            # Exception block should have been triggered
-            mock_task.exception.assert_called()
-
-
 class TestAsyncEnginePoolingStrategy:
     """Tests for pooling strategy configuration."""
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_naive_pooling_strategy(self) -> None:
-        """Test NAIVE pooling strategy creates new client per request."""
+        """Test NAIVE pooling strategy creates new session per request."""
         from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
 
         engine = AsyncEngine(pooling_strategy=PoolingStrategy.NAIVE)
         assert engine._pooling_strategy == PoolingStrategy.NAIVE
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 200
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com"])
 
@@ -606,19 +389,19 @@ class TestAsyncEnginePoolingStrategy:
             assert len(result.results) == 1
             assert result.results[0].status_code == 200
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_naive_pooling_strategy_exception_handling(self) -> None:
         """Test NAIVE pooling strategy handles exceptions gracefully."""
         from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
 
         engine = AsyncEngine(max_concurrent=5, pooling_strategy=PoolingStrategy.NAIVE)
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            # Make the client raise an exception
-            mock_client.get.side_effect = Exception("Connection error")
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            # Make the session raise an exception
+            mock_session.get.side_effect = Exception("Connection error")
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
             result = await engine.run(["https://example.com"])
 
@@ -628,7 +411,7 @@ class TestAsyncEnginePoolingStrategy:
             # The key is that the engine doesn't crash
             assert result.total_time >= 0
 
-    @pytest.mark.asyncio()
+    @pytest.mark.asyncio
     async def test_run_with_empty_url_list(self) -> None:
         """Test run() with empty URL list returns empty result."""
         from async_patterns.engine.async_engine import AsyncEngine
@@ -641,25 +424,25 @@ class TestAsyncEnginePoolingStrategy:
         assert result.total_time == 0.0
         assert result.peak_memory_mb == 0.0
 
-    @pytest.mark.asyncio()
-    async def test_optimized_strategy_taskgroup_exception(self) -> None:
-        """Test OPTIMIZED strategy handles TaskGroup exceptions."""
+    @pytest.mark.asyncio
+    async def test_optimized_strategy_handles_exceptions(self) -> None:
+        """Test OPTIMIZED strategy handles exceptions."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
 
-            # Make get() raise an exception that propagates to TaskGroup
+            # Make get() raise an exception
             async def mock_get(url):
-                raise Exception("TaskGroup level exception")
+                raise Exception("Request level exception")
 
-            mock_client.get = mock_get
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            mock_session.get = mock_get
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
-            # This should still return a valid result (empty due to exception handling)
+            # This should still return a valid result
             result = await engine.run(["https://example.com"])
 
             assert isinstance(result, EngineResult)
@@ -667,87 +450,366 @@ class TestAsyncEnginePoolingStrategy:
             assert result.total_time >= 0
 
 
-class TestAsyncEngineHTTP2Config:
-    """Tests for HTTP/2 configuration in AsyncEngine."""
+class TestAsyncEngineCircuitBreaker:
+    """Tests for CircuitBreaker integration in AsyncEngine."""
 
-    @pytest.mark.asyncio()
-    async def test_http2_enabled_by_default(self) -> None:
-        """HTTP/2 should be enabled by default for better performance."""
+    @pytest.mark.asyncio
+    async def test_circuit_breaker_injection(self) -> None:
+        """Test that AsyncEngine accepts circuit_breaker argument in __init__."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.circuit_breaker import CircuitBreaker
+
+        breaker = CircuitBreaker(name="test")
+        engine = AsyncEngine(circuit_breaker=breaker)
+
+        assert engine._circuit_breaker is breaker
+
+    def test_circuit_breaker_optional(self) -> None:
+        """Test that circuit_breaker is optional (defaults to None)."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
-        assert engine._config.http2 is True
 
-    @pytest.mark.asyncio()
-    async def test_http2_disabled_for_http1_only_servers(self) -> None:
-        """HTTP/2 can be disabled for HTTP/1.1-only servers."""
+        assert engine._circuit_breaker is None
+
+    @pytest.mark.asyncio
+    async def test_record_latency_called(self) -> None:
+        """Test that record_latency is called on the circuit breaker after a request."""
         from async_patterns.engine.async_engine import AsyncEngine
-        from async_patterns.engine.models import ConnectionConfig
+        from async_patterns.patterns.circuit_breaker import CircuitBreaker
 
-        config = ConnectionConfig(http2=False)
-        engine = AsyncEngine(config=config)
-        assert engine._config.http2 is False
+        breaker = CircuitBreaker(name="test")
+        engine = AsyncEngine(circuit_breaker=breaker)
 
-    @pytest.mark.asyncio()
-    async def test_async_client_receives_http2_config(self) -> None:
-        """AsyncClient should receive http2 parameter from config."""
-        from async_patterns.engine.async_engine import AsyncEngine
-        from async_patterns.engine.models import ConnectionConfig
+        # Mock record_latency to verify it's called
+        breaker.record_latency = AsyncMock()
 
-        config = ConnectionConfig(http2=True)
-        engine = AsyncEngine(config=config)
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 200
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
-            await engine.run(["https://example.com"])
+            result = await engine.run(["https://example.com"])
 
-            # Verify AsyncClient was called with http2=True
-            mock_client_class.assert_called_once()
-            call_kwargs = mock_client_class.call_args.kwargs
-            assert call_kwargs.get("http2") is True
+            # Verify record_latency was called
+            breaker.record_latency.assert_awaited_once()
+            latency_arg = breaker.record_latency.call_args[0][0]
+            assert latency_arg > 0
 
-
-class TestAsyncEngineKeepaliveConfig:
-    """Tests for keepalive_expiry configuration in AsyncEngine."""
-
-    @pytest.mark.asyncio()
-    async def test_keepalive_expiry_applied_to_limits(self) -> None:
-        """Keepalive expiry should be passed to httpx.Limits."""
+    @pytest.mark.asyncio
+    async def test_record_latency_called_on_error(self) -> None:
+        """Test that record_latency is called even when request fails."""
         from async_patterns.engine.async_engine import AsyncEngine
-        from async_patterns.engine.models import ConnectionConfig
+        from async_patterns.patterns.circuit_breaker import CircuitBreaker
 
-        config = ConnectionConfig(keepalive_expiry=60.0)
-        engine = AsyncEngine(config=config)
+        breaker = CircuitBreaker(name="test")
+        engine = AsyncEngine(circuit_breaker=breaker)
 
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
+        # Mock record_latency to verify it's called
+        breaker.record_latency = AsyncMock()
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.get.side_effect = Exception("Connection failed")
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            result = await engine.run(["https://example.com"])
+
+            # Verify record_latency was called even on error
+            breaker.record_latency.assert_awaited_once()
+            latency_arg = breaker.record_latency.call_args[0][0]
+            assert latency_arg > 0
+
+    @pytest.mark.asyncio
+    async def test_record_latency_not_called_without_breaker(self) -> None:
+        """Test that record_latency is not called when no circuit breaker is configured."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.circuit_breaker import CircuitBreaker
+
+        # Create a breaker but don't inject it
+        breaker = CircuitBreaker(name="orphan")
+        breaker.record_latency = AsyncMock()
+
+        engine = AsyncEngine()  # No circuit breaker
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
             response = MagicMock()
-            response.status_code = 200
-            response.elapsed.total_seconds.return_value = 0.05
-            mock_client.get.return_value = response
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client_class.return_value.__aexit__.return_value = None
+            response.status = 200
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
 
-            await engine.run(["https://example.com"])
+            result = await engine.run(["https://example.com"])
 
-            # Verify AsyncClient was called with correct limits
-            mock_client_class.assert_called_once()
-            call_kwargs = mock_client_class.call_args.kwargs
-            limits = call_kwargs.get("limits")
-            assert limits is not None
-            assert limits.keepalive_expiry == 60.0
+            # Verify record_latency was NOT called on the orphan breaker
+            breaker.record_latency.assert_not_awaited()
 
-    @pytest.mark.asyncio()
-    async def test_keepalive_expiry_default_value(self) -> None:
-        """Keepalive expiry should default to 30 seconds."""
+
+class TestAsyncEngineRetryPolicy:
+    """Tests for RetryPolicy integration in AsyncEngine."""
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_injection(self) -> None:
+        """Test that AsyncEngine accepts retry_policy argument in __init__."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.retry import RetryConfig, RetryPolicy
+
+        policy = RetryPolicy(RetryConfig(max_attempts=3))
+        engine = AsyncEngine(retry_policy=policy)
+
+        assert engine._retry_policy is policy
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_optional(self) -> None:
+        """Test that retry_policy is optional (defaults to None)."""
         from async_patterns.engine.async_engine import AsyncEngine
 
         engine = AsyncEngine()
-        assert engine._config.keepalive_expiry == 30.0
+
+        assert engine._retry_policy is None
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_with_circuit_breaker(self) -> None:
+        """Test that retry policy and circuit breaker work together."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.circuit_breaker import CircuitBreaker
+        from async_patterns.patterns.retry import RetryConfig, RetryPolicy
+
+        policy = RetryPolicy(RetryConfig(max_attempts=2, base_delay=0.01))
+        breaker = CircuitBreaker(name="test")
+        # Mock record_latency to verify it's called
+        breaker.record_latency = AsyncMock()
+        engine = AsyncEngine(retry_policy=policy, circuit_breaker=breaker)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            response = MagicMock()
+            response.status = 200
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            result = await engine.run(["https://example.com"])
+
+            assert isinstance(result, EngineResult)
+            assert len(result.results) == 1
+            assert result.results[0].status_code == 200
+            # Circuit breaker should have recorded latency
+            breaker.record_latency.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_no_retry_without_policy(self) -> None:
+        """Test that requests are not retried when no retry_policy is set."""
+        from async_patterns.engine.async_engine import AsyncEngine
+
+        engine = AsyncEngine()  # No retry policy
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+
+            response = MagicMock()
+            response.status = 500
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            result = await engine.run(["https://example.com"])
+
+            assert isinstance(result, EngineResult)
+            # Should only have been called once (no retries)
+            assert mock_session.get.call_count == 1
+            assert result.results[0].status_code == 500
+
+
+class TestAsyncEngineRetryStatus:
+    """Tests for status code preservation on retry failures."""
+
+    @pytest.mark.asyncio
+    async def test_failed_retries_preserve_last_status(self) -> None:
+        """Test last HTTP status is preserved when retries exhaust."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.retry import RetryConfig, RetryPolicy
+
+        policy = RetryPolicy(RetryConfig(max_attempts=2, base_delay=0.0))
+        engine = AsyncEngine(retry_policy=policy)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            response = MagicMock()
+            response.status = 503
+            response.headers = {}
+            response.request_info = MagicMock()
+            response.history = ()
+            response.read = AsyncMock(return_value=b"")
+            mock_session.get.return_value = response
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await engine.run(["https://example.com"])
+
+            assert result.results[0].status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_connection_failures_keep_status_zero(self) -> None:
+        """Test connection failures preserve status_code=0 after retries."""
+        from async_patterns.engine.async_engine import AsyncEngine
+        from async_patterns.patterns.retry import RetryConfig, RetryPolicy
+
+        policy = RetryPolicy(RetryConfig(max_attempts=2, base_delay=0.0))
+        engine = AsyncEngine(retry_policy=policy)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.get.side_effect = ConnectionError("connection refused")
+            mock_session_class.return_value.__aenter__.return_value = mock_session
+            mock_session_class.return_value.__aexit__.return_value = None
+
+            with patch("asyncio.sleep", new_callable=AsyncMock):
+                result = await engine.run(["https://example.com"])
+
+            assert result.results[0].status_code == 0
+
+
+class TestStreamingSessionReuse:
+    """Tests to verify streaming mode reuses sessions correctly."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_creates_single_session_optimized(self) -> None:
+        """Test that run_streaming() creates only one session for OPTIMIZED strategy."""
+        from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
+
+        engine = AsyncEngine(max_concurrent=5, pooling_strategy=PoolingStrategy.OPTIMIZED)
+
+        session_creation_count = 0
+        original_client_session = None
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+
+            def track_session_creation(*args, **kwargs):
+                nonlocal session_creation_count, original_client_session
+                session_creation_count += 1
+                mock_session = AsyncMock()
+                mock_response = MagicMock()
+                mock_response.status = 200
+                mock_response.headers = {}
+                mock_response.text = AsyncMock(return_value="test")
+                mock_response.read = AsyncMock(return_value=b"")
+                mock_session.get.return_value = mock_response
+                mock_session.close = AsyncMock()
+                return mock_session
+
+            mock_session_class.side_effect = track_session_creation
+
+            # Generate 10 URLs to stream
+            urls = [f"https://example.com/{i}" for i in range(10)]
+
+            results = []
+            async for result in engine.run_streaming(urls):
+                results.append(result)
+
+            # Verify only ONE session was created for OPTIMIZED strategy
+            assert session_creation_count == 1, (
+                f"Expected 1 session for OPTIMIZED strategy, got {session_creation_count}"
+            )
+            assert len(results) == 10
+
+
+class TestStreamingShutdown:
+    """Tests for streaming shutdown behavior."""
+
+    @pytest.mark.asyncio
+    async def test_streaming_workers_cancelled_on_close(self) -> None:
+        """Test run_streaming workers are cancelled by close()."""
+        from async_patterns.engine.async_engine import AsyncEngine
+
+        engine = AsyncEngine(max_concurrent=2)
+        hold = asyncio.Event()
+
+        async def slow_fetch(session, url: str) -> RequestResult:
+            await hold.wait()
+            return RequestResult(
+                url=url,
+                status_code=200,
+                latency_ms=1.0,
+                timestamp=0.0,
+                attempt=1,
+                error=None,
+            )
+
+        engine._fetch_url = AsyncMock(side_effect=slow_fetch)
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            mock_session = AsyncMock()
+            mock_session.close = AsyncMock()
+            mock_session_class.return_value = mock_session
+
+            urls = ["https://example.com/1", "https://example.com/2"]
+
+            async def consume() -> None:
+                async for _ in engine.run_streaming(urls):
+                    pass
+
+            consumer_task = asyncio.create_task(consume())
+
+            for _ in range(50):
+                if engine._active_tasks:
+                    break
+                await asyncio.sleep(0)
+
+            assert engine._active_tasks
+
+            await engine.close(timeout=0.01)
+
+            assert not engine._active_tasks
+
+            consumer_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await consumer_task
+
+    @pytest.mark.asyncio
+    async def test_streaming_creates_multiple_sessions_naive(self) -> None:
+        """Test that run_streaming() creates multiple sessions for NAIVE strategy."""
+        from async_patterns.engine.async_engine import AsyncEngine, PoolingStrategy
+
+        engine = AsyncEngine(max_concurrent=5, pooling_strategy=PoolingStrategy.NAIVE)
+
+        session_creation_count = 0
+
+        with patch("aiohttp.ClientSession") as mock_session_class:
+
+            def track_session_creation(*args, **kwargs):
+                nonlocal session_creation_count
+                session_creation_count += 1
+                mock_session = AsyncMock()
+                mock_response = MagicMock()
+                mock_response.status = 200
+                mock_response.headers = {}
+                mock_response.text = AsyncMock(return_value="test")
+                mock_response.read = AsyncMock(return_value=b"")
+                mock_session.get.return_value = mock_response
+                mock_session.close = AsyncMock()
+                return mock_session
+
+            mock_session_class.side_effect = track_session_creation
+
+            # Generate 10 URLs to stream
+            urls = [f"https://example.com/{i}" for i in range(10)]
+
+            results = []
+            async for result in engine.run_streaming(urls):
+                results.append(result)
+
+            # NAIVE strategy should create one session per request
+            assert session_creation_count == 10, (
+                f"Expected 10 sessions for NAIVE strategy, got {session_creation_count}"
+            )
+            assert len(results) == 10

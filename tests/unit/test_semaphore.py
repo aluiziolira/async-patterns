@@ -249,22 +249,23 @@ class TestSemaphoreMetricsDataclass:
     def test_metrics_dataclass_creation(self):
         """Test SemaphoreMetrics can be created."""
         metrics = SemaphoreMetrics(
-            current_active=5, peak_active=10, total_acquisitions=100
+            current_active=5, peak_active=10, total_acquisitions=100, max_concurrent=50
         )
         assert metrics.current_active == 5
         assert metrics.peak_active == 10
         assert metrics.total_acquisitions == 100
+        assert metrics.max_concurrent == 50
 
     def test_metrics_dataclass_equality(self):
         """Test SemaphoreMetrics equality comparison."""
         metrics1 = SemaphoreMetrics(
-            current_active=1, peak_active=2, total_acquisitions=3
+            current_active=1, peak_active=2, total_acquisitions=3, max_concurrent=10
         )
         metrics2 = SemaphoreMetrics(
-            current_active=1, peak_active=2, total_acquisitions=3
+            current_active=1, peak_active=2, total_acquisitions=3, max_concurrent=10
         )
         metrics3 = SemaphoreMetrics(
-            current_active=1, peak_active=2, total_acquisitions=4
+            current_active=1, peak_active=2, total_acquisitions=4, max_concurrent=10
         )
 
         assert metrics1 == metrics2
@@ -273,13 +274,14 @@ class TestSemaphoreMetricsDataclass:
     def test_metrics_dataclass_immutable(self):
         """Test that SemaphoreMetrics fields can be read and fields exist."""
         metrics = SemaphoreMetrics(
-            current_active=1, peak_active=2, total_acquisitions=3
+            current_active=1, peak_active=2, total_acquisitions=3, max_concurrent=10
         )
 
         # Dataclasses are mutable, but fields can be read
         assert metrics.current_active == 1
         assert metrics.peak_active == 2
         assert metrics.total_acquisitions == 3
+        assert metrics.max_concurrent == 10
 
 
 class TestSemaphoreLimiterTimeout:
@@ -365,3 +367,41 @@ class TestSemaphoreLimiterTimeout:
 
         with suppress(asyncio.CancelledError):
             await task
+
+
+class TestSemaphoreLimiterSetMaxConcurrent:
+    """Tests for set_max_concurrent runtime adjustment."""
+
+    @pytest.mark.asyncio
+    async def test_set_max_concurrent_increase(self):
+        """Test that limit can be raised at runtime."""
+        limiter = SemaphoreLimiter(max_concurrent=2)
+
+        # Increase the limit
+        limiter.set_max_concurrent(5)
+
+        assert limiter.max_concurrent == 5
+        metrics = limiter.get_metrics()
+        assert metrics.max_concurrent == 5
+
+    @pytest.mark.asyncio
+    async def test_set_max_concurrent_decrease(self):
+        """Test that limit can be lowered at runtime."""
+        limiter = SemaphoreLimiter(max_concurrent=5)
+
+        # Decrease the limit
+        limiter.set_max_concurrent(2)
+
+        assert limiter.max_concurrent == 2
+        metrics = limiter.get_metrics()
+        assert metrics.max_concurrent == 2
+
+    def test_set_max_concurrent_invalid(self):
+        """Test that ValueError is raised when limit is < 1."""
+        limiter = SemaphoreLimiter(max_concurrent=5)
+
+        with pytest.raises(ValueError, match="max_concurrent must be at least 1"):
+            limiter.set_max_concurrent(0)
+
+        with pytest.raises(ValueError, match="max_concurrent must be at least 1"):
+            limiter.set_max_concurrent(-1)

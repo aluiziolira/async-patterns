@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from async_patterns.engine import EngineResult, SyncEngine
-from async_patterns.engine.base import Engine
+from async_patterns.engine.base import SyncEngine as SyncEngineProtocol
 
 
 class TestSyncEngineProtocol:
@@ -20,7 +20,7 @@ class TestSyncEngineProtocol:
     def test_sync_engine_implements_engine_protocol(self) -> None:
         """SyncEngine should be an instance of Engine protocol."""
         engine = SyncEngine()
-        assert isinstance(engine, Engine)
+        assert isinstance(engine, SyncEngineProtocol)
 
     def test_sync_engine_has_name_property(self) -> None:
         """SyncEngine should have name 'sync'."""
@@ -41,7 +41,7 @@ class TestSyncEngineProtocol:
 class TestSyncEngineRun:
     """Test cases for SyncEngine.run() method."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_requests_session(self):
         """Create a mock requests Session."""
         with patch("async_patterns.engine.sync_engine.requests") as mock_requests:
@@ -176,7 +176,7 @@ class TestSyncEngineRun:
 class TestSyncEngineErrorHandling:
     """Test cases for SyncEngine error handling scenarios."""
 
-    @pytest.fixture()
+    @pytest.fixture
     def mock_requests_session(self):
         """Create a mock requests Session."""
         with patch("async_patterns.engine.sync_engine.requests") as mock_requests:

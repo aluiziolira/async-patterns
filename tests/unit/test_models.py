@@ -309,7 +309,6 @@ class TestConnectionConfig:
         assert config.timeout == 30.0
         assert config.max_keepalive_connections == 20
         assert config.keepalive_expiry == 30.0
-        assert config.http2 is True
 
     def test_connection_config_custom_values(self) -> None:
         """ConnectionConfig should accept custom values."""
@@ -320,27 +319,11 @@ class TestConnectionConfig:
             timeout=10.0,
             max_keepalive_connections=10,
             keepalive_expiry=60.0,
-            http2=False,
         )
         assert config.max_connections == 50
         assert config.timeout == 10.0
         assert config.max_keepalive_connections == 10
         assert config.keepalive_expiry == 60.0
-        assert config.http2 is False
-
-    def test_connection_config_http2_default_enabled(self) -> None:
-        """HTTP/2 should be enabled by default for better performance."""
-        from async_patterns.engine import ConnectionConfig
-
-        config = ConnectionConfig()
-        assert config.http2 is True
-
-    def test_connection_config_http2_can_be_disabled(self) -> None:
-        """HTTP/2 can be disabled for HTTP/1.1-only servers."""
-        from async_patterns.engine import ConnectionConfig
-
-        config = ConnectionConfig(http2=False)
-        assert config.http2 is False
 
     def test_connection_config_keepalive_expiry_default(self) -> None:
         """Keepalive expiry should default to 30 seconds."""
@@ -375,7 +358,7 @@ class TestRetryConfig:
         from async_patterns.engine.models import RetryConfig
 
         config = RetryConfig()
-        assert config.max_retries == 3
+        assert config.max_attempts == 3
         assert config.base_delay == 1.0
         assert config.max_delay == 60.0
         assert config.jitter_factor == 0.1
@@ -472,3 +455,183 @@ class TestEngineResultPercentiles:
         assert engine_result.p50_latency_ms == 0.0
         assert engine_result.p95_latency_ms == 0.0
         assert engine_result.p99_latency_ms == 0.0
+
+
+class TestEngineResultErrorBreakdown:
+    """Test cases for EngineResult error_breakdown property."""
+
+    def test_error_breakdown_empty(self) -> None:
+        """No errors returns empty dict."""
+        from async_patterns.engine import EngineResult, RequestResult
+
+        results = [
+            RequestResult(
+                url="https://example.com",
+                status_code=200,
+                latency_ms=100.0,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            )
+        ]
+        engine_result = EngineResult(results=results, total_time=1.0, peak_memory_mb=10.0)
+        assert engine_result.error_breakdown == {}
+
+    def test_error_breakdown_http_errors(self) -> None:
+        """Groups HTTP status codes."""
+        from async_patterns.engine import EngineResult, RequestResult
+
+        results = [
+            RequestResult(
+                url="a",
+                status_code=404,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+            RequestResult(
+                url="b",
+                status_code=404,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+            RequestResult(
+                url="c",
+                status_code=500,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+            RequestResult(
+                url="d",
+                status_code=200,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+        ]
+        engine_result = EngineResult(results=results, total_time=1.0, peak_memory_mb=10.0)
+        assert engine_result.error_breakdown == {"HTTP 404": 2, "HTTP 500": 1}
+
+    def test_error_breakdown_exception_types(self) -> None:
+        """Groups exception messages."""
+        from async_patterns.engine import EngineResult, RequestResult
+
+        results = [
+            RequestResult(
+                url="a",
+                status_code=0,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error="ConnectionError: connection refused",
+            ),
+            RequestResult(
+                url="b",
+                status_code=0,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error="ConnectionError: connection timeout",
+            ),
+            RequestResult(
+                url="c",
+                status_code=0,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error="TimeoutError: request timed out",
+            ),
+            RequestResult(
+                url="d",
+                status_code=200,
+                latency_ms=10,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+        ]
+        engine_result = EngineResult(results=results, total_time=1.0, peak_memory_mb=10.0)
+        assert engine_result.error_breakdown == {
+            "ConnectionError": 2,
+            "TimeoutError": 1,
+        }
+
+
+class TestEngineResultSerialization:
+    """Test cases for EngineResult serialization methods."""
+
+    def test_to_dict_structure(self) -> None:
+        """Validates all required fields."""
+        from async_patterns.engine import EngineResult, RequestResult
+
+        results = [
+            RequestResult(
+                url="https://example.com",
+                status_code=200,
+                latency_ms=100.0,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+            RequestResult(
+                url="https://example2.com",
+                status_code=500,
+                latency_ms=200.0,
+                timestamp=0,
+                attempt=1,
+                error="Server error",
+            ),
+        ]
+        engine_result = EngineResult(results=results, total_time=1.0, peak_memory_mb=50.5)
+        result_dict = engine_result.to_dict()
+
+        assert "total_requests" in result_dict
+        assert "successful" in result_dict
+        assert "failed" in result_dict
+        assert "total_duration_seconds" in result_dict
+        assert "requests_per_second" in result_dict
+        assert "p50_latency_ms" in result_dict
+        assert "p95_latency_ms" in result_dict
+        assert "p99_latency_ms" in result_dict
+        assert "peak_memory_mb" in result_dict
+        assert "error_breakdown" in result_dict
+
+        # Verify values
+        assert result_dict["total_requests"] == 2
+        assert result_dict["successful"] == 1
+        assert result_dict["failed"] == 1
+        assert result_dict["total_duration_seconds"] == 1.0
+        assert result_dict["requests_per_second"] == 2.0
+        assert result_dict["peak_memory_mb"] == 50.5
+        assert result_dict["error_breakdown"] == {"Server error": 1}
+
+    def test_to_json_valid(self) -> None:
+        """Output is valid JSON."""
+        import json
+
+        from async_patterns.engine import EngineResult, RequestResult
+
+        results = [
+            RequestResult(
+                url="https://example.com",
+                status_code=200,
+                latency_ms=100.0,
+                timestamp=0,
+                attempt=1,
+                error=None,
+            ),
+        ]
+        engine_result = EngineResult(results=results, total_time=1.0, peak_memory_mb=50.5)
+        json_str = engine_result.to_json()
+
+        # Should be parseable JSON
+        parsed = json.loads(json_str)
+        assert parsed["total_requests"] == 1
+        assert parsed["successful"] == 1
+        assert parsed["failed"] == 0
