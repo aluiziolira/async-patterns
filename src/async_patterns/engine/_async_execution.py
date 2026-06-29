@@ -326,8 +326,7 @@ class AsyncHttpExecutor:
 
         worker_count = min(self._max_concurrent, len(urls))
         tasks = [
-            asyncio.create_task(self._worker_wrapper(worker))
-            for _task_id in range(worker_count)
+            asyncio.create_task(self._worker_wrapper(worker)) for _task_id in range(worker_count)
         ]
 
         await url_queue.join()
