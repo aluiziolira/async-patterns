@@ -1,13 +1,12 @@
 """SQLite writer with buffered async writes using aiosqlite."""
 
-import asyncio
-import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
 
 import aiosqlite
 
+from async_patterns.persistence._buffered import BufferedStorageWriter
 from async_patterns.persistence.base import StorageWriter
 
 
@@ -28,7 +27,7 @@ class SqliteWriterConfig:
     flush_interval: float = 5.0
 
 
-class SqliteWriter(StorageWriter):
+class SqliteWriter(BufferedStorageWriter, StorageWriter):
     """SQLite writer with buffered async writes using aiosqlite.
 
     Batches records in memory and inserts them in a single transaction when
@@ -48,11 +47,9 @@ class SqliteWriter(StorageWriter):
         Args:
             config: Writer configuration.
         """
+        super().__init__(buffer_size=config.buffer_size)
         self._config = config
-        self._buffer: list[dict[str, Any]] = []
         self._db: aiosqlite.Connection | None = None
-        self._closed = False
-        self._lock = asyncio.Lock()
 
     async def __aenter__(self) -> Self:
         """Enter async context manager and open the database.
@@ -73,7 +70,7 @@ class SqliteWriter(StorageWriter):
         """
         await self.close()
 
-    async def _open(self) -> None:
+    async def _open_target(self) -> None:
         """Open the SQLite database connection."""
         self._db = await aiosqlite.connect(
             self._config.db_path,
@@ -110,72 +107,20 @@ class SqliteWriter(StorageWriter):
         )
         await self._db.commit()
 
-    async def write(self, record: dict[str, Any]) -> None:
-        """Write a single record to the SQLite database.
-
-        Adds record to internal buffer. Auto-flushes when buffer reaches
-        `buffer_size`.
-
-        Args:
-            record: Dictionary to write to the database.
-        """
-        if self._closed:
-            raise RuntimeError("Cannot write to closed writer")
-
-        if self._db is None:
-            await self._open()
-
-        if dataclasses.is_dataclass(record) and not isinstance(record, type):
-            record_dict = dataclasses.asdict(record)
-        elif hasattr(record, "__dataclass_fields__"):
-            record_dict = record.__dict__ if hasattr(record, "__dict__") else dict(record)
-        else:
-            record_dict = record
-
-        async with self._lock:
-            self._buffer.append(record_dict)
-
-            if len(self._buffer) >= self._config.buffer_size:
-                await self._flush_locked()
-
-    async def write_batch(self, records: list[dict[str, Any]]) -> int:
-        """Write multiple records to the SQLite database.
-
-        Adds all records to the buffer and then flushes.
-
-        Args:
-            records: List of dictionaries to write.
-
-        Returns:
-            Number of records written.
-        """
-        if self._closed:
-            raise RuntimeError("Cannot write to closed writer")
-
-        for record in records:
-            await self.write(record)
-
-        return len(records)
-
-    async def flush(self) -> None:
-        """Flush all buffered records to the database."""
-        async with self._lock:
-            await self._flush_locked()
-
-    async def _flush_locked(self) -> None:
-        """Internal flush method called with lock held."""
-        if not self._db or not self._buffer:
+    async def _write_records(self, records: list[dict[str, Any]]) -> None:
+        """Insert normalized records into SQLite in one transaction."""
+        if not self._db or not records:
             return
 
         table_name = self._config.table_name
-        columns = list(self._buffer[0].keys())
+        columns = list(records[0].keys())
 
         placeholders = ", ".join(f":{col}" for col in columns)
         column_names = ", ".join(columns)
 
         await self._db.execute("BEGIN TRANSACTION")
         try:
-            for record in self._buffer:
+            for record in records:
                 await self._db.execute(
                     f"""
                     INSERT INTO {table_name} ({column_names})
@@ -184,24 +129,12 @@ class SqliteWriter(StorageWriter):
                     record,
                 )
             await self._db.execute("COMMIT")
-            self._buffer.clear()
         except Exception:
             await self._db.execute("ROLLBACK")
             raise
 
-    async def close(self) -> None:
-        """Close the writer and release resources.
-
-        Flushes any remaining buffered data and closes the database connection.
-        """
-        if self._closed:
-            return
-
-        async with self._lock:
-            await self._flush_locked()
-
-        self._closed = True
-
+    async def _close_target(self) -> None:
+        """Close the SQLite connection."""
         if self._db:
             await self._db.close()
             self._db = None

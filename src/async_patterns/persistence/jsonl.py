@@ -1,6 +1,5 @@
 """JSONL file writer with buffered async writes."""
 
-import dataclasses
 import json
 import os
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from typing import Any, Self
 
 import aiofiles
 
+from async_patterns.persistence._buffered import BufferedStorageWriter
 from async_patterns.persistence.base import StorageWriter
 
 
@@ -27,7 +27,7 @@ class JsonlWriterConfig:
     flush_interval: float = 5.0
 
 
-class JsonlWriter(StorageWriter):
+class JsonlWriter(BufferedStorageWriter, StorageWriter):
     """JSONL file writer with buffered async writes.
 
     Batches records in memory and flushes to disk when the buffer reaches
@@ -50,10 +50,9 @@ class JsonlWriter(StorageWriter):
         Args:
             config: Writer configuration.
         """
+        super().__init__(buffer_size=config.buffer_size)
         self._config = config
-        self._buffer: list[str] = []
         self._file: Any = None
-        self._closed = False
         self._file_descriptor: int | None = None
 
     async def __aenter__(self) -> Self:
@@ -75,7 +74,7 @@ class JsonlWriter(StorageWriter):
         """
         await self.close()
 
-    async def _open(self) -> None:
+    async def _open_target(self) -> None:
         """Open the output file for writing."""
         self._file = await aiofiles.open(
             self._config.file_path,
@@ -86,83 +85,20 @@ class JsonlWriter(StorageWriter):
         # Get the file descriptor for fsync
         self._file_descriptor = self._file.fileno()
 
-    async def write(self, record: dict[str, Any]) -> None:
-        """Write a single record to the JSONL file.
-
-        Serializes to JSON and appends to internal buffer. Auto-flushes when
-        buffer reaches `buffer_size`.
-
-        Args:
-            record: Dictionary to write as a JSON line.
-        """
-        if self._closed:
-            raise RuntimeError("Cannot write to closed writer")
-
-        if self._file is None:
-            await self._open()
-
-        if dataclasses.is_dataclass(record) and not isinstance(record, type):
-            record_dict = dataclasses.asdict(record)
-        elif hasattr(record, "__dataclass_fields__"):
-            record_dict = record.__dict__ if hasattr(record, "__dict__") else dict(record)
-        else:
-            record_dict = record
-
-        json_line = json.dumps(record_dict, ensure_ascii=False)
-        self._buffer.append(json_line)
-
-        if len(self._buffer) >= self._config.buffer_size:
-            await self.flush()
-
-    async def write_batch(self, records: list[dict[str, Any]]) -> int:
-        """Write multiple records to the JSONL file.
-
-        Adds all records to the buffer and then flushes.
-
-        Args:
-            records: List of dictionaries to write.
-
-        Returns:
-            Number of records written.
-        """
-        if self._closed:
-            raise RuntimeError("Cannot write to closed writer")
-
-        for record in records:
-            await self.write(record)
-
-        return len(records)
-
-    async def flush(self) -> None:
-        """Flush all buffered records to disk.
-
-        Writes all buffered JSON lines to the file and clears the buffer.
-        Forces write to disk using fsync.
-        """
-        if not self._file or not self._buffer:
+    async def _write_records(self, records: list[dict[str, Any]]) -> None:
+        """Write normalized records as JSON lines."""
+        if not self._file:
             return
 
-        for line in self._buffer:
-            await self._file.write(line + "\n")
+        for record in records:
+            await self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
         await self._file.flush()
         if self._file_descriptor is not None:
             os.fsync(self._file_descriptor)
 
-        self._buffer.clear()
-
-    async def close(self) -> None:
-        """Close the writer and release resources.
-
-        Flushes any remaining buffered data and closes the file handle.
-        """
-        if self._closed:
-            return
-
-        await self.flush()
-
-        self._closed = True
-
+    async def _close_target(self) -> None:
+        """Close the JSONL file handle."""
         if self._file:
             await self._file.close()
             self._file = None

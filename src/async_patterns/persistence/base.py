@@ -6,11 +6,11 @@ from typing import Any, Protocol
 class StorageWriter(Protocol):
     """Protocol for persistent storage backends."""
 
-    async def write(self, record: dict[str, Any]) -> None:
+    async def write(self, record: Any) -> None:
         """Write a single record."""
         ...
 
-    async def write_batch(self, records: list[dict[str, Any]]) -> int:
+    async def write_batch(self, records: list[Any]) -> int:
         """Write multiple records. Returns count written."""
         ...
 
