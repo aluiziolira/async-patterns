@@ -402,11 +402,7 @@ if __name__ == "__main__":
     # Default mock server URL
     default_url = "http://127.0.0.1:8765"
 
-    # Use command line arg or default
-    if len(sys.argv) > 1:
-        base_url = sys.argv[1]
-    else:
-        base_url = default_url
+    base_url = sys.argv[1] if len(sys.argv) > 1 else default_url
 
     print("Running retry benchmark against:", base_url)
     print()

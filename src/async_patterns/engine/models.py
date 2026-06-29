@@ -8,11 +8,11 @@ from __future__ import annotations
 import json
 import statistics
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 
-class RequestStatus(str, Enum):
+class RequestStatus(StrEnum):
     """Status of an individual HTTP request.
 
     Attributes:

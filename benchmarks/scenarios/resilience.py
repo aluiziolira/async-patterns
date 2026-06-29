@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass
@@ -179,10 +180,8 @@ async def benchmark_circuit_breaker_transitions(
         # Stop metrics recording
         if recording_task is not None:
             recording_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await recording_task
-            except asyncio.CancelledError:
-                pass
 
     end_time = time.perf_counter()
     total_time = end_time - start_time
@@ -457,11 +456,7 @@ if __name__ == "__main__":
     # Default mock server URL
     default_url = "http://127.0.0.1:8765"
 
-    # Use command line arg or default
-    if len(sys.argv) > 1:
-        base_url = sys.argv[1]
-    else:
-        base_url = default_url
+    base_url = sys.argv[1] if len(sys.argv) > 1 else default_url
 
     print("Running resilience benchmark against:", base_url)
     print()

@@ -211,11 +211,7 @@ if __name__ == "__main__":
                 "/status/204",
             ]
 
-            # Use command line args or defaults
-            if len(sys.argv) > 1:
-                count = int(sys.argv[1])
-            else:
-                count = 50
+            count = int(sys.argv[1]) if len(sys.argv) > 1 else 50
 
             urls = [f"{base_url}{endpoints[i % len(endpoints)]}" for i in range(count)]
 
