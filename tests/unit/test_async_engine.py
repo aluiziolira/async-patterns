@@ -177,7 +177,7 @@ class TestAsyncEngineRun:
                 error=None,
             )
 
-        engine._fetch_url = AsyncMock(side_effect=fake_fetch)
+        engine._executor.fetch_url = AsyncMock(side_effect=fake_fetch)
 
         with patch("aiohttp.ClientSession") as mock_session_class:
             mock_session = AsyncMock()
@@ -745,7 +745,7 @@ class TestStreamingShutdown:
                 error=None,
             )
 
-        engine._fetch_url = AsyncMock(side_effect=slow_fetch)
+        engine._executor.fetch_url = AsyncMock(side_effect=slow_fetch)
 
         with patch("aiohttp.ClientSession") as mock_session_class:
             mock_session = AsyncMock()
