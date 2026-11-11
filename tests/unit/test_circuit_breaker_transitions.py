@@ -156,9 +156,7 @@ class TestOpenRejectionDoesNotConsumeRetries:
         )
         await _open_breaker(breaker)
 
-        policy = RetryPolicy(
-            config=RetryConfig(max_attempts=5, base_delay=0.01, jitter_factor=0.0)
-        )
+        policy = RetryPolicy(config=RetryConfig(max_attempts=5, base_delay=0.01, jitter_factor=0.0))
         calls = 0
 
         async def should_not_run() -> str:
