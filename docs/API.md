@@ -115,12 +115,17 @@ class RetryConfig:
     jitter_factor: float = 0.1
     retry_budget: int = 10
     retry_budget_window_seconds: float = 60.0
+    retry_after_max: float = 60.0
 ```
+
+When a transient error carries a `Retry-After` header (delta-seconds or HTTP-date), the delay
+before the next attempt is `min(max(backoff, retry_after), retry_after_max)`. Malformed values
+are ignored and normal backoff is used.
 
 Usage:
 
 ```python
-config = RetryConfig(max_attempts=5, base_delay=0.5, max_delay=10.0, jitter_factor=0.2)
+config = RetryConfig(max_attempts=5, base_delay=0.5, max_delay=10.0, retry_after_max=30.0)
 policy = RetryPolicy(config=config)
 ```
 
@@ -144,7 +149,7 @@ The `CircuitBreaker` implements a state machine (CLOSED → OPEN → HALF_OPEN) 
 **Key States:**
 - **CLOSED**: Normal operation, all requests allowed
 - **OPEN**: Circuit tripped due to failures/latency, requests rejected for `open_state_duration` seconds
-- **HALF_OPEN**: Testing recovery with limited requests (`half_open_max_calls`)
+- **HALF_OPEN**: Testing recovery; at most `half_open_max_calls` trials are admitted (`probe_count` caps concurrency)
 
 **Trigger Conditions:**
 - Failure count exceeds `failure_threshold`

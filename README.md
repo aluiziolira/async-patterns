@@ -1,28 +1,22 @@
 # Async-Patterns Performance Lab
 
-> Maximize HTTP throughput in Python: from 130 RPS (sync) to 2,500 RPS (async) — a **20x improvement**.
+A small lab for comparing sync, threaded, and async HTTP concurrency patterns in Python — bounded concurrency, retries, circuit breaking, and streaming persistence.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![Coverage](https://img.shields.io/badge/coverage-86%25-brightgreen.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Results
 
-| Engine      | Time | Throughput    | vs Sync |
-| ----------- | ---- | ------------- | ------- |
-| Synchronous | 39s  | 130 RPS       | 1.0x    |
-| Threaded    | 8s   | 600 RPS       | 5x      |
-| **Async**   | 2s   | **2,500 RPS** | **20x** |
+Historical absolute RPS numbers previously listed here are **not pinned to a recorded run artifact** in this repo, so they are omitted. Re-measure on your machine:
 
-Connection pooling adds another **2x** on top:
-
-```
-NAIVE strategy:     3.6s (1,400 RPS)
-OPTIMIZED strategy: 2.0s (2,500 RPS)
-Improvement Factor: 2x
+```bash
+make install
+make benchmark
 ```
 
-**NAIVE** creates a new HTTP session per request (TCP handshake + TLS negotiation every time). **OPTIMIZED** reuses a single session with persistent connections — eliminating handshake overhead and allowing HTTP keep-alive.
+That runs `python -m benchmarks.runner --request-count 5000 --pooling` (Sync vs Threaded vs Async, NAIVE vs OPTIMIZED pooling). Record the printed summary plus Python version, OS, and CPU count if you need citable numbers.
+
+Connection pooling comparison (same command, `--pooling`): **NAIVE** opens a new HTTP session per request; **OPTIMIZED** reuses one session with keep-alive. The runner reports both; treat the ratio as environment-specific.
 
 ## Why This Matters
 
@@ -32,9 +26,9 @@ Most Python HTTP code falls into two traps: **sequential requests** that waste t
 
 - **Bounded Concurrency** — Semaphore-based limiting prevents resource exhaustion
 - **Circuit Breaker** — State machine (CLOSED → OPEN → HALF_OPEN) stops cascade failures
-- **Exponential Backoff** — Retry with jitter for graceful recovery from transient errors
+- **Exponential Backoff** — Retry with jitter; honors `Retry-After` when present
 - **Producer-Consumer Pipeline** — Backpressure-aware streaming with constant memory footprint
-- **Connection Pooling** — Session reuse eliminates TCP/TLS handshake overhead (2.8x improvement)
+- **Connection Pooling** — Session reuse eliminates TCP/TLS handshake overhead
 
 ## Quick Start
 
@@ -53,15 +47,16 @@ all workers.
 
 ## Rate Limit Retries (HTTP 429)
 
-429 responses are treated as transient failures by `RetryPolicy`, so they will be retried. When a
-server sends a `Retry-After` header, the engine includes it in the raised error message so custom
-retry logic can inspect it (the built-in retry policy does not automatically delay on it).
+429 responses are treated as transient failures by `RetryPolicy`. When a response includes
+`Retry-After` (delta-seconds or HTTP-date), the sleep before the next attempt is
+`min(max(backoff, retry_after), retry_after_max)`. Malformed values fall back to normal
+backoff. Cap via `RetryConfig.retry_after_max` (default 60s).
 
 ```python
 from async_patterns.engine.async_engine import AsyncEngine
 from async_patterns.patterns.retry import RetryPolicy, RetryConfig
 
-retry_policy = RetryPolicy(RetryConfig(max_attempts=3, base_delay=0.5))
+retry_policy = RetryPolicy(RetryConfig(max_attempts=3, base_delay=0.5, retry_after_max=30.0))
 engine = AsyncEngine(retry_policy=retry_policy, max_concurrent=10)
 
 result = await engine.run(["https://api.example.com/endpoint"])
@@ -69,11 +64,11 @@ result = await engine.run(["https://api.example.com/endpoint"])
 
 ## Benchmark Suite
 
-| Command                     | Description                                             | Duration |
-| --------------------------- | ------------------------------------------------------- | -------- |
-| `make benchmark`            | Compare Sync vs Threaded vs Async engines (3 runs each) | ~2.5min  |
-| `make benchmark-full`       | Sustained load test (duration mode, summary output)     | 60s      |
-| `make benchmark-resilience` | Circuit breaker state transitions under 100% errors     | ~6s      |
+| Command                     | Description                                             |
+| --------------------------- | ------------------------------------------------------- |
+| `make benchmark`            | Compare Sync vs Threaded vs Async engines (3 runs each) |
+| `make benchmark-full`       | Sustained load test (duration mode, summary output)     |
+| `make benchmark-resilience` | Circuit breaker state transitions under 100% errors     |
 
 **Resilience benchmark validates:**
 - CLOSED → OPEN transition on failure threshold
@@ -84,11 +79,24 @@ result = await engine.run(["https://api.example.com/endpoint"])
 metrics, use `benchmarks/streaming_runner.py` programmatically. It is intentionally not wired to a
 Make target.
 
+## Known limits
+
+- **JSONL durability under hard cancel:** flushes write a batch as one payload and restore the
+  in-memory buffer if the await is interrupted before completion. A cancel that lands inside the
+  write syscall can still tear the last line on disk; `close()` does not attempt to repair torn
+  lines.
+- **Interrupted in-flight HTTP work:** cancellation does not synthesize a `RequestResult`. The
+  URL is either recorded once (completed before cancel) or absent from the result set (not
+  completed). Callers that need an explicit "cancelled" status must track outstanding URLs
+  themselves.
+- **Half-open concurrency vs trials:** `half_open_max_calls` caps total trial admissions;
+  `probe_count` caps concurrent probes within that budget.
+
 ## Technical Decisions
 
 **Why `aiohttp` over `httpx`?** While `httpx` offers a unified sync/async API, we chose `aiohttp` for its mature async-first architecture and tighter event loop integration. In high-concurrency scenarios (1000+ simultaneous connections), `aiohttp`'s native design avoids the abstraction overhead that sync-compatible libraries carry. The trade-off is API complexity — `aiohttp` requires explicit session management — but for a benchmarking suite focused on maximum throughput, raw performance wins.
 
-**Why bounded concurrency instead of `asyncio.gather()`?** Unbounded `gather()` is the most common async anti-pattern. Firing 10,000 requests simultaneously looks fast in demos but collapses in production: connection pools exhaust, servers return 429s, and memory spikes kill your process. Our semaphore-based limiter enforces a configurable ceiling (default: 100 concurrent requests) while a circuit breaker monitors error rates and latency. When the downstream service degrades, we fail fast rather than pile on. This adds ~2ms overhead per request but prevents the catastrophic failures that make async code "too risky" for production.
+**Why bounded concurrency instead of `asyncio.gather()`?** Unbounded `gather()` is the most common async anti-pattern. Firing 10,000 requests simultaneously looks fast in demos but collapses in production: connection pools exhaust, servers return 429s, and memory spikes kill your process. Our semaphore-based limiter enforces a configurable ceiling (default: 100 concurrent requests) while a circuit breaker monitors error rates and latency. When the downstream service degrades, we fail fast rather than pile on.
 
 ## Learn More
 
