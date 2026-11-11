@@ -300,7 +300,12 @@ class CircuitBreaker:
             self._half_open_acquired.set(None)
 
         # Cancellation / shutdown is not a downstream failure signal.
+        # Free the HALF_OPEN admission slot so a cancelled trial cannot
+        # permanently consume recovery capacity.
         if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
+            async with self._lock:
+                if self._state == CircuitState.HALF_OPEN and self._half_open_admitted > 0:
+                    self._half_open_admitted -= 1
             return
 
         async with self._lock:

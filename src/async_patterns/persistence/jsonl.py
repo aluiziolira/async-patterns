@@ -86,13 +86,18 @@ class JsonlWriter(BufferedStorageWriter, StorageWriter):
         self._file_descriptor = self._file.fileno()
 
     async def _write_records(self, records: list[dict[str, Any]]) -> None:
-        """Write normalized records as JSON lines."""
+        """Write normalized records as JSON lines in a single payload.
+
+        A single write avoids leaving some buffer records durable while others
+        remain queued when a flush is cancelled mid-batch (which would risk
+        double-recording on the next flush). A cancel that lands inside the
+        await of that write can still tear the final line; see README limits.
+        """
         if not self._file:
             return
 
-        for record in records:
-            await self._file.write(json.dumps(record, ensure_ascii=False) + "\n")
-
+        payload = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
+        await self._file.write(payload)
         await self._file.flush()
         if self._file_descriptor is not None:
             os.fsync(self._file_descriptor)

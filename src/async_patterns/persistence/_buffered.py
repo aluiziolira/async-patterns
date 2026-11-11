@@ -69,9 +69,15 @@ class BufferedStorageWriter(StorageWriter):
         if not self._opened or not self._buffer:
             return
 
-        records = list(self._buffer)
-        await self._write_records(records)
-        self._buffer.clear()
+        # Move the buffer aside so a cancelled/failed write can restore it
+        # without duplicating records that never became durable.
+        records = self._buffer
+        self._buffer = []
+        try:
+            await self._write_records(records)
+        except BaseException:
+            self._buffer = records + self._buffer
+            raise
 
     async def _open_target(self) -> None:
         raise NotImplementedError

@@ -129,7 +129,9 @@ class SqliteWriter(BufferedStorageWriter, StorageWriter):
                     record,
                 )
             await self._db.execute("COMMIT")
-        except Exception:
+        except BaseException:
+            # CancelledError is a BaseException; still roll back so a later
+            # flush/close cannot double-insert a partially applied batch.
             await self._db.execute("ROLLBACK")
             raise
 
