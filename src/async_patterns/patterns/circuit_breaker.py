@@ -7,6 +7,7 @@ import logging
 import os
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum
@@ -59,11 +60,12 @@ class CircuitBreaker:
         failure_threshold: Number of failures before opening circuit. Default 10.
         error_rate_threshold: Error rate percentage to trigger open. Default 10%.
         latency_threshold_multiplier: P95 latency multiplier vs baseline. Default 3x.
-        half_open_max_calls: Max calls allowed in HALF_OPEN state. Default 3.
+        half_open_max_calls: Max trial calls admitted in HALF_OPEN. Default 3.
         open_state_duration: Seconds to stay open before HALF_OPEN. Default 60.
         probe_count: Max concurrent probes allowed in HALF_OPEN. Default 1.
         baseline_latency_ms: Baseline P95 latency in milliseconds. Default 100.
         window_duration: Sliding window duration in seconds. Default 30.
+        clock: Monotonic clock used for state timing. Defaults to time.monotonic.
 
     Example:
         ```python
@@ -87,6 +89,7 @@ class CircuitBreaker:
         probe_count: int = 1,
         baseline_latency_ms: float | None = None,
         window_duration: float | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         # Load from environment with defaults
         self._name = name
@@ -112,6 +115,7 @@ class CircuitBreaker:
         self._window_duration = window_duration or float(
             os.getenv(f"CIRCUIT_BREAKER_WINDOW_{name.upper()}", "30.0")
         )
+        self._clock = clock or time.monotonic
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -119,8 +123,9 @@ class CircuitBreaker:
         self._total_request_count = 0
         self._rejected_count = 0
         self._last_failure_timestamp: float | None = None
-        self._last_state_change = time.monotonic()
+        self._last_state_change = self._clock()
         self._half_open_success_count = 0
+        self._half_open_admitted = 0
         self._half_open_semaphore: asyncio.Semaphore | None = None
         self._half_open_acquired: contextvars.ContextVar[asyncio.Semaphore | None] = (
             contextvars.ContextVar(f"{name}_half_open_acquired", default=None)
@@ -156,7 +161,7 @@ class CircuitBreaker:
 
     def _prune_window(self) -> None:
         """Remove requests outside the sliding window."""
-        now = time.monotonic()
+        now = self._clock()
         cutoff = now - self._window_duration
         while self._request_window and self._request_window[0][0] < cutoff:
             self._request_window.popleft()
@@ -213,35 +218,35 @@ class CircuitBreaker:
             if self._should_open():
                 old_state = self._state
                 self._state = CircuitState.OPEN
-                self._last_state_change = time.monotonic()
+                self._last_state_change = self._clock()
                 self._log_state_change(old_state, CircuitState.OPEN, "failure_threshold_exceeded")
 
     async def _check_and_transition_from_open(self) -> None:
         """Check if enough time has passed to transition from OPEN to HALF_OPEN."""
         async with self._lock:
             if self._state == CircuitState.OPEN:
-                time_in_open = time.monotonic() - self._last_state_change
+                time_in_open = self._clock() - self._last_state_change
                 if time_in_open >= self._open_state_duration:
                     old_state = self._state
                     self._half_open_semaphore = asyncio.Semaphore(self._probe_count)
-                    self._state = CircuitState.HALF_OPEN
-                    self._last_state_change = time.monotonic()
+                    self._half_open_admitted = 0
                     self._half_open_success_count = 0
+                    self._state = CircuitState.HALF_OPEN
+                    self._last_state_change = self._clock()
                     self._log_state_change(old_state, CircuitState.HALF_OPEN, "timeout_elapsed")
 
     async def _check_and_transition_from_half_open(self) -> None:
-        """Check if circuit should close or reopen from HALF_OPEN state."""
+        """Check if circuit should close from HALF_OPEN after enough successes."""
         async with self._lock:
-            if self._state == CircuitState.HALF_OPEN:
-                if self._should_close_from_half_open():
-                    old_state = self._state
-                    self._state = CircuitState.CLOSED
-                    self._failure_count = 0
-                    self._last_state_change = time.monotonic()
-                    self._log_state_change(old_state, CircuitState.CLOSED, "half_open_success")
-                elif self._half_open_success_count >= self._half_open_max_calls:
-                    # If all allowed calls succeed, close; otherwise stay half-open
-                    pass
+            if self._state == CircuitState.HALF_OPEN and self._should_close_from_half_open():
+                old_state = self._state
+                self._state = CircuitState.CLOSED
+                self._failure_count = 0
+                self._half_open_admitted = 0
+                self._half_open_success_count = 0
+                self._half_open_semaphore = None
+                self._last_state_change = self._clock()
+                self._log_state_change(old_state, CircuitState.CLOSED, "half_open_success")
 
     async def __aenter__(self) -> Self:
         """Check circuit state before allowing request."""
@@ -256,12 +261,23 @@ class CircuitBreaker:
             )
 
         if self._state == CircuitState.HALF_OPEN:
+            async with self._lock:
+                if self._half_open_admitted >= self._half_open_max_calls:
+                    self._rejected_count += 1
+                    raise CircuitBreakerError(
+                        f"Circuit breaker '{self._name}' is half-open and has already "
+                        f"admitted {self._half_open_max_calls} trial request(s)."
+                    )
+                self._half_open_admitted += 1
+
             if self._half_open_semaphore is None:
                 self._half_open_semaphore = asyncio.Semaphore(self._probe_count)
             try:
                 await asyncio.wait_for(self._half_open_semaphore.acquire(), timeout=0.001)
             except TimeoutError as exc:
                 async with self._lock:
+                    # Concurrent probe capacity exhausted: reverse the admission slot.
+                    self._half_open_admitted = max(0, self._half_open_admitted - 1)
                     self._rejected_count += 1
                 raise CircuitBreakerError(
                     f"Circuit breaker '{self._name}' is half-open and at probe capacity."
@@ -283,10 +299,14 @@ class CircuitBreaker:
             half_open_semaphore.release()
             self._half_open_acquired.set(None)
 
+        # Cancellation / shutdown is not a downstream failure signal.
+        if exc_type is not None and issubclass(exc_type, asyncio.CancelledError):
+            return
+
         async with self._lock:
             self._total_request_count += 1
 
-        timestamp = time.monotonic()
+        timestamp = self._clock()
 
         if exc_type is not None:
             reopened_from_half_open = False
@@ -299,6 +319,8 @@ class CircuitBreaker:
                     self._state = CircuitState.OPEN
                     self._last_state_change = timestamp
                     self._half_open_success_count = 0
+                    self._half_open_admitted = 0
+                    self._half_open_semaphore = None
                     reopened_from_half_open = True
 
             if reopened_from_half_open:
@@ -339,7 +361,7 @@ class CircuitBreaker:
 
         threshold = self._baseline_latency_ms * self._latency_threshold_multiplier
         if latency_ms > threshold:
-            timestamp = time.monotonic()
+            timestamp = self._clock()
             async with self._lock:
                 self._failure_count += 1
                 self._last_failure_timestamp = timestamp
@@ -375,7 +397,8 @@ class CircuitBreaker:
         self._total_request_count = 0
         self._rejected_count = 0
         self._last_failure_timestamp = None
-        self._last_state_change = time.monotonic()
+        self._last_state_change = self._clock()
         self._half_open_success_count = 0
+        self._half_open_admitted = 0
         self._half_open_semaphore = None
         self._request_window.clear()
