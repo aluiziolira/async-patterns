@@ -140,10 +140,11 @@ class AsyncHttpExecutor:
         if self._pooling_strategy == PoolingStrategy.OPTIMIZED:
             shared_session = self._transport.open_session(self._config)
 
+        tasks: list[asyncio.Task[None]] = []
         try:
 
             async def worker() -> None:
-                while True:
+                while not self._shutdown:
                     try:
                         url = url_queue.get_nowait()
                     except asyncio.QueueEmpty:
@@ -185,13 +186,12 @@ class AsyncHttpExecutor:
                             except asyncio.QueueEmpty:
                                 break
                         return
-
+        finally:
             for task in tasks:
                 if not task.done():
                     task.cancel()
-
-            await asyncio.gather(*tasks, return_exceptions=True)
-        finally:
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             if shared_session is not None:
                 await shared_session.close()
 
@@ -309,7 +309,7 @@ class AsyncHttpExecutor:
             url_queue.put_nowait(url)
 
         async def worker() -> None:
-            while True:
+            while not self._shutdown:
                 try:
                     url = url_queue.get_nowait()
                 except asyncio.QueueEmpty:
@@ -318,6 +318,10 @@ class AsyncHttpExecutor:
                 start_time = time.perf_counter()
                 try:
                     results.append(await fetch(url))
+                except asyncio.CancelledError:
+                    if self._shutdown:
+                        return
+                    raise
                 except Exception as exc:
                     logging.warning("Worker failed for %s: %s", url, exc)
                     results.append(self._unexpected_error_result(url, start_time, exc))
@@ -329,8 +333,13 @@ class AsyncHttpExecutor:
             asyncio.create_task(self._worker_wrapper(worker)) for _task_id in range(worker_count)
         ]
 
-        await url_queue.join()
-        await asyncio.gather(*tasks)
+        try:
+            await asyncio.gather(*tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
         return results
 
     async def _worker_wrapper(self, worker: Callable[[], Awaitable[None]]) -> None:

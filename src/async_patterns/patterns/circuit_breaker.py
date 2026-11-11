@@ -245,6 +245,7 @@ class CircuitBreaker:
                 self._half_open_admitted = 0
                 self._half_open_success_count = 0
                 self._half_open_semaphore = None
+                self._request_window.clear()
                 self._last_state_change = self._clock()
                 self._log_state_change(old_state, CircuitState.CLOSED, "half_open_success")
 
@@ -252,16 +253,16 @@ class CircuitBreaker:
         """Check circuit state before allowing request."""
         await self._check_and_transition_from_open()
 
-        if self._state == CircuitState.OPEN:
-            async with self._lock:
+        half_open_semaphore: asyncio.Semaphore | None = None
+        async with self._lock:
+            if self._state == CircuitState.OPEN:
                 self._rejected_count += 1
-            raise CircuitBreakerError(
-                f"Circuit breaker '{self._name}' is open. "
-                f"Requests are rejected for {self._open_state_duration}s after failure threshold."
-            )
+                raise CircuitBreakerError(
+                    f"Circuit breaker '{self._name}' is open. "
+                    f"Requests are rejected for {self._open_state_duration}s after failure threshold."
+                )
 
-        if self._state == CircuitState.HALF_OPEN:
-            async with self._lock:
+            if self._state == CircuitState.HALF_OPEN:
                 if self._half_open_admitted >= self._half_open_max_calls:
                     self._rejected_count += 1
                     raise CircuitBreakerError(
@@ -269,11 +270,13 @@ class CircuitBreaker:
                         f"admitted {self._half_open_max_calls} trial request(s)."
                     )
                 self._half_open_admitted += 1
+                if self._half_open_semaphore is None:
+                    self._half_open_semaphore = asyncio.Semaphore(self._probe_count)
+                half_open_semaphore = self._half_open_semaphore
 
-            if self._half_open_semaphore is None:
-                self._half_open_semaphore = asyncio.Semaphore(self._probe_count)
+        if half_open_semaphore is not None:
             try:
-                await asyncio.wait_for(self._half_open_semaphore.acquire(), timeout=0.001)
+                await asyncio.wait_for(half_open_semaphore.acquire(), timeout=0.001)
             except TimeoutError as exc:
                 async with self._lock:
                     # Concurrent probe capacity exhausted: reverse the admission slot.
@@ -283,7 +286,7 @@ class CircuitBreaker:
                     f"Circuit breaker '{self._name}' is half-open and at probe capacity."
                 ) from exc
             else:
-                self._half_open_acquired.set(self._half_open_semaphore)
+                self._half_open_acquired.set(half_open_semaphore)
 
         return self
 

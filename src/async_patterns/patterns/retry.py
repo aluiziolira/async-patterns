@@ -37,12 +37,8 @@ def parse_retry_after(
     if not stripped:
         return None
 
-    if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
-        try:
-            seconds = int(stripped)
-        except ValueError:
-            return None
-        return float(max(0, seconds))
+    if stripped.isascii() and stripped.isdigit():
+        return float(int(stripped))
 
     try:
         retry_at = parsedate_to_datetime(stripped)
@@ -398,11 +394,6 @@ class RetryPolicy:
         last_exception: BaseException | None = None
         total_delay = 0.0
 
-        if circuit_breaker is not None and circuit_breaker.is_open:
-            from async_patterns.patterns.circuit_breaker import CircuitBreakerError
-
-            raise CircuitBreakerError(f"Circuit breaker '{circuit_breaker.name}' is open")
-
         for attempt in range(self._max_attempts):
             attempt_count = attempt + 1
             try:
@@ -429,6 +420,7 @@ class RetryPolicy:
                 from async_patterns.patterns.circuit_breaker import CircuitBreakerError
 
                 if isinstance(exc, CircuitBreakerError):
+                    exc.attempt_count = max(1, attempt)  # type: ignore[attr-defined]
                     raise
 
                 # Check if error is transient

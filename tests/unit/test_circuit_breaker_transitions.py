@@ -170,3 +170,51 @@ class TestOpenRejectionDoesNotConsumeRetries:
 
         assert calls == 0
         assert sleep_mock.await_count == 0
+        assert breaker.get_metrics().total_rejected == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_policy_transitions_open_breaker_to_half_open_and_closes(self) -> None:
+        clock = FakeClock()
+        breaker = CircuitBreaker(
+            name="retry-recover",
+            failure_threshold=1,
+            open_state_duration=10.0,
+            half_open_max_calls=1,
+            clock=clock,
+        )
+        await _open_breaker(breaker)
+
+        policy = RetryPolicy(config=RetryConfig(max_attempts=3, base_delay=0.01, jitter_factor=0.0))
+
+        clock.advance(10.0)
+
+        async def healthy() -> str:
+            return "recovered"
+
+        assert await policy.execute(healthy, circuit_breaker=breaker) == "recovered"
+        assert breaker.is_closed
+
+    @pytest.mark.asyncio
+    async def test_recovery_clears_window_so_single_failure_does_not_reopen(self) -> None:
+        clock = FakeClock()
+        breaker = CircuitBreaker(
+            name="window-reset",
+            failure_threshold=2,
+            error_rate_threshold=1.0,
+            open_state_duration=5.0,
+            window_duration=60.0,
+            half_open_max_calls=1,
+            clock=clock,
+        )
+        await _open_breaker(breaker, failures=2)
+        clock.advance(5.0)
+
+        async with breaker:
+            pass
+        assert breaker.is_closed
+
+        with pytest.raises(ValueError, match="post-recovery"):
+            async with breaker:
+                raise ValueError("post-recovery")
+
+        assert breaker.is_closed

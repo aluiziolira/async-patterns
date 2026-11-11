@@ -132,7 +132,11 @@ class SqliteWriter(BufferedStorageWriter, StorageWriter):
         except BaseException:
             # CancelledError is a BaseException; still roll back so a later
             # flush/close cannot double-insert a partially applied batch.
-            await self._db.execute("ROLLBACK")
+            import asyncio
+            from contextlib import suppress
+
+            with suppress(Exception):
+                await asyncio.shield(self._db.execute("ROLLBACK"))
             raise
 
     async def _close_target(self) -> None:

@@ -28,6 +28,8 @@ class TestParseRetryAfter:
 
     def test_malformed_returns_none(self) -> None:
         assert parse_retry_after("not-a-valid-retry-after") is None
+        assert parse_retry_after("-5") is None
+        assert parse_retry_after("²") is None
         assert parse_retry_after("") is None
         assert parse_retry_after("  ") is None
 
