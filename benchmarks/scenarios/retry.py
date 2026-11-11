@@ -153,7 +153,7 @@ async def benchmark_retry_on_429_errors(
 
     This test verifies that:
     1. 429 errors trigger retries
-    2. Retry-After headers are surfaced in error messages for custom handling
+    2. Retry-After headers are honored by RetryPolicy delay selection
     3. Requests eventually succeed after rate limit clears
 
     Args:
