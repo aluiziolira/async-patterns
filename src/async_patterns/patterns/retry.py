@@ -4,14 +4,88 @@ import asyncio
 import random
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from typing import TypeVar
 
 from async_patterns.engine.models import RetryConfig
 from async_patterns.patterns.circuit_breaker import CircuitBreaker
 
 T = TypeVar("T")
+
+
+def parse_retry_after(
+    value: str,
+    *,
+    now: float | None = None,
+) -> float | None:
+    """Parse a Retry-After header into a non-negative delay in seconds.
+
+    Accepts delta-seconds or an HTTP-date. Past dates resolve to 0.0.
+    Malformed values return None so callers can fall back to backoff.
+
+    Args:
+        value: Raw Retry-After header value.
+        now: Unix timestamp used when interpreting HTTP-dates. When omitted,
+            ``time.time()`` is used.
+
+    Returns:
+        Delay in seconds, or None when the value cannot be parsed.
+    """
+    stripped = value.strip()
+    if not stripped:
+        return None
+
+    if stripped.isdigit() or (stripped.startswith("-") and stripped[1:].isdigit()):
+        try:
+            seconds = int(stripped)
+        except ValueError:
+            return None
+        return float(max(0, seconds))
+
+    try:
+        retry_at = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+
+    if retry_at is None:
+        return None
+
+    if retry_at.tzinfo is None:
+        # HTTP-date without zone is treated as GMT per RFC 9110.
+        from datetime import UTC
+
+        retry_at = retry_at.replace(tzinfo=UTC)
+
+    reference = time.time() if now is None else now
+    return max(0.0, retry_at.timestamp() - reference)
+
+
+def _extract_retry_after_seconds(exc: BaseException, *, now: float | None = None) -> float | None:
+    """Extract a parsed Retry-After delay from a raised HTTP error, if present."""
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+
+    raw: str | None
+    if isinstance(headers, Mapping):
+        raw_value = headers.get("Retry-After")
+        if raw_value is None:
+            raw_value = headers.get("retry-after")
+        raw = None if raw_value is None else str(raw_value)
+    else:
+        getter = getattr(headers, "get", None)
+        if getter is None:
+            return None
+        raw_value = getter("Retry-After")
+        if raw_value is None:
+            raw_value = getter("retry-after")
+        raw = None if raw_value is None else str(raw_value)
+
+    if raw is None:
+        return None
+    return parse_retry_after(raw, now=now)
 
 
 @dataclass
@@ -137,6 +211,7 @@ class RetryPolicy:
         jitter_factor: float | None = None,
         retry_budget: int | None = None,
         retry_budget_window_seconds: float | None = None,
+        retry_after_max: float | None = None,
         base_delay_ms: float | None = None,
         max_delay_ms: float | None = None,
     ) -> None:
@@ -170,6 +245,9 @@ class RetryPolicy:
             if retry_budget_window_seconds is not None
             else self._config.retry_budget_window_seconds
         )
+        effective_retry_after_max = (
+            retry_after_max if retry_after_max is not None else self._config.retry_after_max
+        )
 
         self._max_attempts = int(effective_max_attempts)
         self._base_delay_ms = float(effective_base_delay_ms)
@@ -177,6 +255,7 @@ class RetryPolicy:
         self._jitter_factor = float(effective_jitter)
         self._retry_budget = int(effective_retry_budget)
         self._retry_budget_window = float(effective_retry_budget_window)
+        self._retry_after_max = float(effective_retry_after_max)
 
         self._attempt_counts: dict[str, int] = {}
         self._budget_window_start = time.monotonic()
@@ -192,8 +271,13 @@ class RetryPolicy:
         """Maximum delay between retries in milliseconds."""
         return self._max_delay_ms
 
-    def _calculate_delay(self, attempt: int) -> float:
-        """Calculate delay for a given attempt number.
+    @property
+    def retry_after_max(self) -> float:
+        """Maximum Retry-After-influenced delay in seconds."""
+        return self._retry_after_max
+
+    def _calculate_backoff_delay(self, attempt: int) -> float:
+        """Calculate exponential backoff delay for a given attempt number.
 
         Formula: delay = min(base_delay × 2^attempt + jitter, max_delay)
 
@@ -214,6 +298,30 @@ class RetryPolicy:
         # Clamp to max delay
         clamped_delay_ms: float = min(delay_ms, self._max_delay_ms)
         return clamped_delay_ms / 1000.0  # Convert to seconds
+
+    def _calculate_delay(self, attempt: int, exc: BaseException | None = None) -> float:
+        """Calculate the sleep delay for the next retry attempt.
+
+        When ``exc`` carries a valid Retry-After header, the delay is
+        ``min(max(backoff, retry_after), retry_after_max)``. Malformed or
+        missing Retry-After values fall back to normal backoff.
+
+        Args:
+            attempt: Current attempt number (0-indexed).
+            exc: Exception from the failed attempt, used to read Retry-After.
+
+        Returns:
+            float: Delay in seconds.
+        """
+        backoff = self._calculate_backoff_delay(attempt)
+        if exc is None:
+            return backoff
+
+        retry_after = _extract_retry_after_seconds(exc)
+        if retry_after is None:
+            return backoff
+
+        return min(max(backoff, retry_after), self._retry_after_max)
 
     async def _check_budget(self, key: str = "default") -> None:
         """Check if retry budget is available for a retry attempt.
@@ -317,6 +425,12 @@ class RetryPolicy:
                     exc.attempt_count = attempt_count
                     raise
 
+                # Open/half-open admission rejections fail fast and must not burn retries.
+                from async_patterns.patterns.circuit_breaker import CircuitBreakerError
+
+                if isinstance(exc, CircuitBreakerError):
+                    raise
+
                 # Check if error is transient
                 if not self._is_transient(exc):
                     raise
@@ -329,8 +443,8 @@ class RetryPolicy:
                     error.attempt_count = attempt_count
                     raise error from exc
 
-                # Calculate and apply delay
-                delay = self._calculate_delay(attempt)
+                # Calculate and apply delay (honors Retry-After when present)
+                delay = self._calculate_delay(attempt, last_exception)
                 total_delay += delay * 1000  # Track in ms
 
                 await asyncio.sleep(delay)
@@ -380,4 +494,5 @@ __all__ = [
     "RetryMetrics",
     "RetryExecutionResult",
     "RetryPolicy",
+    "parse_retry_after",
 ]
