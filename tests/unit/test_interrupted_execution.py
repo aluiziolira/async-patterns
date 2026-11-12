@@ -56,6 +56,39 @@ class TestJsonlInterruptedFlush:
         urls = [json.loads(line)["url"] for line in lines]
         assert urls == ["https://example.com/1", "https://example.com/2"]
 
+    @pytest.mark.asyncio
+    async def test_cancelled_during_flush_after_write_does_not_double_record(
+        self, tmp_path: Path
+    ) -> None:
+        path = tmp_path / "out.jsonl"
+        config = JsonlWriterConfig(file_path=path, buffer_size=100)
+        records = [
+            {"url": "https://example.com/1", "status_code": 200},
+            {"url": "https://example.com/2", "status_code": 200},
+        ]
+
+        writer = JsonlWriter(config)
+        for record in records:
+            await writer.write(record)
+
+        assert writer._file is not None
+        real_flush = writer._file.flush
+
+        async def cancel_flush() -> None:
+            await real_flush()
+            raise asyncio.CancelledError()
+
+        with patch.object(writer._file, "flush", side_effect=cancel_flush):
+            with pytest.raises(asyncio.CancelledError):
+                await writer.flush()
+
+        await writer.close()
+
+        lines = [line for line in path.read_text().splitlines() if line]
+        assert len(lines) == 2
+        urls = [json.loads(line)["url"] for line in lines]
+        assert urls == ["https://example.com/1", "https://example.com/2"]
+
 
 class TestSqliteInterruptedFlush:
     """SQLite sink rolls back cancelled transactions and records once on close."""
@@ -80,6 +113,49 @@ class TestSqliteInterruptedFlush:
                 return await real_execute(sql, parameters)
 
             with patch.object(writer._db, "execute", side_effect=flaky_execute):
+                with pytest.raises(asyncio.CancelledError):
+                    await writer.flush()
+
+            await writer.close()
+
+            db = await aiosqlite.connect(db_path)
+            try:
+                cursor = await db.execute("SELECT url FROM request_results ORDER BY id")
+                rows = [row[0] for row in await cursor.fetchall()]
+            finally:
+                await db.close()
+
+            assert rows == ["https://example.com/a", "https://example.com/b"]
+        finally:
+            for suffix in ("", "-wal", "-shm"):
+                p = Path(str(db_path) + suffix)
+                if p.exists():
+                    p.unlink()
+
+    @pytest.mark.asyncio
+    async def test_cancelled_during_commit_does_not_double_insert(self) -> None:
+        db_path = _temp_path(".db")
+        try:
+            config = SqliteWriterConfig(db_path=db_path, buffer_size=100)
+            writer = SqliteWriter(config)
+            await writer.write({"url": "https://example.com/a", "status_code": 200})
+            await writer.write({"url": "https://example.com/b", "status_code": 201})
+
+            assert writer._db is not None
+            real_execute = writer._db.execute
+
+            async def execute_commit_cancel(sql: str, parameters: object | None = None):
+                if sql.strip().upper().startswith("COMMIT"):
+                    if parameters is None:
+                        await real_execute(sql)
+                    else:
+                        await real_execute(sql, parameters)
+                    raise asyncio.CancelledError()
+                if parameters is None:
+                    return await real_execute(sql)
+                return await real_execute(sql, parameters)
+
+            with patch.object(writer._db, "execute", side_effect=execute_commit_cancel):
                 with pytest.raises(asyncio.CancelledError):
                     await writer.flush()
 

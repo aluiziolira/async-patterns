@@ -1,5 +1,6 @@
 """JSONL file writer with buffered async writes."""
 
+import asyncio
 import json
 import os
 from dataclasses import dataclass
@@ -98,9 +99,10 @@ class JsonlWriter(BufferedStorageWriter, StorageWriter):
 
         payload = "".join(json.dumps(record, ensure_ascii=False) + "\n" for record in records)
         await self._file.write(payload)
-        await self._file.flush()
+        records.clear()
+        await asyncio.shield(self._file.flush())
         if self._file_descriptor is not None:
-            os.fsync(self._file_descriptor)
+            await asyncio.shield(asyncio.to_thread(os.fsync, self._file_descriptor))
 
     async def _close_target(self) -> None:
         """Close the JSONL file handle."""
