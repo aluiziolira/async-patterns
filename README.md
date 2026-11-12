@@ -103,6 +103,10 @@ Make target.
 - [API Reference](docs/API.md) — Engine classes, data models, pattern interfaces
 - [Development Guide](docs/DEVELOPMENT.md) — Setup, commands, project structure
 
+## Independent retry-budget comparison
+
+Run `python -m benchmarks.retry_budget_comparison` from the repository root. The harness compares a non-binding shared retry budget with a finite one under the same failure schedule: paired healthy and mixed workloads (mixed defaults to 40% healthy / 40% recover-after-first-failure / 20% persistent), alternating arm order, and a fresh server, session, and policy per arm. Raw JSON lands in a unique OS temp directory. Header-send timing and logical-completion timing are recorded separately; this is a controlled loopback lab, not production evidence.
+
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
