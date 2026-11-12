@@ -173,6 +173,31 @@ class TestOpenRejectionDoesNotConsumeRetries:
         assert breaker.get_metrics().total_rejected == 1
 
     @pytest.mark.asyncio
+    async def test_failure_that_opens_breaker_fails_fast_without_backoff_sleep(self) -> None:
+        clock = FakeClock()
+        breaker = CircuitBreaker(
+            name="trip-fast",
+            failure_threshold=1,
+            open_state_duration=60.0,
+            clock=clock,
+        )
+        policy = RetryPolicy(config=RetryConfig(max_attempts=4, base_delay=5.0, jitter_factor=0.0))
+        calls = 0
+
+        async def flaky() -> str:
+            nonlocal calls
+            calls += 1
+            raise ConnectionError("transient boom")
+
+        with patch("asyncio.sleep", new_callable=AsyncMock) as sleep_mock:
+            with pytest.raises(CircuitBreakerError):
+                await policy.execute(flaky, circuit_breaker=breaker)
+
+        assert calls == 1
+        assert sleep_mock.await_count == 0
+        assert breaker.is_open
+
+    @pytest.mark.asyncio
     async def test_retry_policy_transitions_open_breaker_to_half_open_and_closes(self) -> None:
         clock = FakeClock()
         breaker = CircuitBreaker(

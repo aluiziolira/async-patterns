@@ -435,6 +435,16 @@ class RetryPolicy:
                     error.attempt_count = attempt_count
                     raise error from exc
 
+                # If this failure just tripped the circuit breaker to OPEN, fail fast
+                # through the breaker instead of sleeping for backoff first.
+                if circuit_breaker is not None and circuit_breaker.is_open:
+                    try:
+                        async with circuit_breaker:
+                            pass
+                    except CircuitBreakerError as cb_exc:
+                        cb_exc.attempt_count = attempt_count  # type: ignore[attr-defined]
+                        raise
+
                 # Calculate and apply delay (honors Retry-After when present)
                 delay = self._calculate_delay(attempt, last_exception)
                 total_delay += delay * 1000  # Track in ms
