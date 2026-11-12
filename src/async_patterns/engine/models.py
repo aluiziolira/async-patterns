@@ -198,15 +198,18 @@ class ConnectionConfig:
 class RetryConfig:
     """Configuration for retry logic with exponential backoff.
 
-    Implements the formula: delay = min(base_delay × 2^attempt + jitter, max_delay)
+    Implements the formula: delay = min(base_delay × 2^attempt + jitter, max_delay).
+    When a response includes Retry-After, the effective delay is
+    min(max(backoff, retry_after), retry_after_max).
 
     Attributes:
         max_attempts: Total number of attempts including initial request (default: 3).
         base_delay: Base delay in seconds (default: 1.0).
-        max_delay: Maximum delay cap in seconds (default: 60.0).
+        max_delay: Maximum exponential-backoff delay cap in seconds (default: 60.0).
         jitter_factor: Jitter as fraction of delay (default: 0.1).
         retry_budget: Maximum retries allowed per window (default: 10).
         retry_budget_window_seconds: Window size in seconds (default: 60.0).
+        retry_after_max: Cap for Retry-After-influenced delays in seconds (default: 60.0).
     """
 
     max_attempts: int = 3
@@ -215,6 +218,7 @@ class RetryConfig:
     jitter_factor: float = 0.1
     retry_budget: int = 10
     retry_budget_window_seconds: float = 60.0
+    retry_after_max: float = 60.0
 
     def calculate_delay(self, attempt: int) -> float:
         """Calculate delay for a given attempt number.

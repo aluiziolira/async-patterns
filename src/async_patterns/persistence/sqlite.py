@@ -1,5 +1,7 @@
 """SQLite writer with buffered async writes using aiosqlite."""
 
+import asyncio
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Self
@@ -118,6 +120,7 @@ class SqliteWriter(BufferedStorageWriter, StorageWriter):
         placeholders = ", ".join(f":{col}" for col in columns)
         column_names = ", ".join(columns)
 
+        committed = False
         await self._db.execute("BEGIN TRANSACTION")
         try:
             for record in records:
@@ -128,9 +131,13 @@ class SqliteWriter(BufferedStorageWriter, StorageWriter):
                     """,
                     record,
                 )
-            await self._db.execute("COMMIT")
-        except Exception:
-            await self._db.execute("ROLLBACK")
+            committed = True
+            records.clear()
+            await asyncio.shield(self._db.execute("COMMIT"))
+        except BaseException:
+            if not committed:
+                with suppress(Exception):
+                    await asyncio.shield(self._db.execute("ROLLBACK"))
             raise
 
     async def _close_target(self) -> None:

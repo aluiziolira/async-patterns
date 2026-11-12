@@ -74,8 +74,8 @@ async def benchmark_retry_with_exponential_backoff(
     # Create retry policy with exponential backoff
     retry_config = RetryConfig(
         max_attempts=max_attempts,
-        base_delay_ms=base_delay_ms,
-        max_delay_ms=5000.0,
+        base_delay=base_delay_ms / 1000.0,
+        max_delay=5.0,
         jitter_factor=0.1,
         retry_budget=100,
         retry_budget_window_seconds=60.0,
@@ -124,9 +124,7 @@ async def benchmark_retry_with_exponential_backoff(
     }
 
     # Calculate successful after retry
-    successful_after_retry = sum(
-        1 for r in result.results if r.attempt > 1 and r.error is None
-    )
+    successful_after_retry = sum(1 for r in result.results if r.attempt > 1 and r.error is None)
 
     # Calculate total retries
     total_retries = sum(r.attempt - 1 for r in result.results)
@@ -153,7 +151,7 @@ async def benchmark_retry_on_429_errors(
 
     This test verifies that:
     1. 429 errors trigger retries
-    2. Retry-After headers are surfaced in error messages for custom handling
+    2. Retry-After headers are honored by RetryPolicy delay selection
     3. Requests eventually succeed after rate limit clears
 
     Args:
@@ -168,8 +166,8 @@ async def benchmark_retry_on_429_errors(
     """
     retry_config = RetryConfig(
         max_attempts=max_attempts,
-        base_delay_ms=base_delay_ms,
-        max_delay_ms=1000.0,
+        base_delay=base_delay_ms / 1000.0,
+        max_delay=1.0,
         jitter_factor=0.1,
     )
 
@@ -201,9 +199,7 @@ async def benchmark_retry_on_429_errors(
             "attempt_count": retry_metrics.attempt_count,
             "total_delay_ms": retry_metrics.total_delay_ms,
         },
-        "rps": (
-            total_requests / (end_time - start_time) if end_time > start_time else 0.0
-        ),
+        "rps": (total_requests / (end_time - start_time) if end_time > start_time else 0.0),
     }
 
 
@@ -243,8 +239,8 @@ async def benchmark_circuit_breaker_with_retry(
 
     retry_config = RetryConfig(
         max_attempts=max_attempts,
-        base_delay_ms=50.0,
-        max_delay_ms=1000.0,
+        base_delay=0.05,
+        max_delay=1.0,
     )
 
     retry_policy = RetryPolicy(config=retry_config)
@@ -281,9 +277,7 @@ async def benchmark_circuit_breaker_with_retry(
             "attempt_count": retry_metrics.attempt_count,
             "budget_consumed": retry_metrics.budget_consumed,
         },
-        "rps": (
-            total_requests / (end_time - start_time) if end_time > start_time else 0.0
-        ),
+        "rps": (total_requests / (end_time - start_time) if end_time > start_time else 0.0),
     }
 
 
@@ -361,9 +355,7 @@ async def run_full_retry_benchmark(
         print(f"  Successful: {combined_result['successful']}")
         print(f"  Failed: {combined_result['failed']}")
         print(f"  Circuit Breaker State: {combined_result['circuit_breaker']['state']}")
-        print(
-            f"  Total Rejected: {combined_result['circuit_breaker']['total_rejected']}"
-        )
+        print(f"  Total Rejected: {combined_result['circuit_breaker']['total_rejected']}")
         print(f"  Retry Attempts: {combined_result['retry']['attempt_count']}")
         print()
 
