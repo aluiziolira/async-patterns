@@ -106,3 +106,7 @@ Make target.
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+### Independent retry-budget comparison
+
+Run `python -m benchmarks.retry_budget_comparison` from the repository root. This independent loopback lab compares the existing retry policy with a non-binding budget and a shared finite budget, using paired healthy and mixed schedules, alternating arm order, a bounded worker pool, and a fresh server, session, and policy per arm. It writes raw JSON to a unique operating-system temporary directory. The default mixed schedule allocates 40% healthy, 40% first-attempt failures that recover, and 20% persistent failures; integer allocation, request order, per-attempt outcomes, server arrivals, terminal outcomes, timings, source hashes, and environment are retained. Header timings and full logical completion timings measure different intervals. This controlled local experiment does not establish production behavior.
