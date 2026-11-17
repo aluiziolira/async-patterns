@@ -2,7 +2,7 @@
 name = "async-patterns"
 version = "0.1.0"
 description = "A production-grade benchmarking and implementation suite demonstrating mastery of Python's asyncio ecosystem for high-concurrency data acquisition."
-authors = ["Aluizio Lira <alumlira@gmail.com>"]
+authors = ["Aluizio Lira <aluizio@aluiziolira.dev>"]
 readme = "README.md"
 packages = [{include = "async_patterns", from = "src"}]
 
